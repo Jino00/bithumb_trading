@@ -3,8 +3,6 @@ Streamlit 모니터링 대시보드 — 실시간 봇 성과를 시각화한다.
 
 실행: streamlit run dashboard/app.py
 """
-import json
-import os
 import sqlite3
 import sys
 from datetime import datetime
@@ -17,7 +15,7 @@ import streamlit as st
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-import config
+import config  # noqa: E402
 
 DB_PATH = config.DB_PATH
 

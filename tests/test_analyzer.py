@@ -2,7 +2,6 @@
 TradeAnalyzer 단위 테스트
 """
 import unittest
-from datetime import datetime
 
 from analyzer.analyzer import TradeAnalyzer, AnalysisReport
 

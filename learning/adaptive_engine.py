@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import List, Optional, Set, Tuple
 
 import config
-from analyzer.analyzer import AnalysisReport, TradeAnalyzer
+from analyzer.analyzer import TradeAnalyzer
 from backtest.backtest_engine import BacktestEngine
 from backtest.data_fetcher import DataFetcher
 from learning.adaptation_rules import (

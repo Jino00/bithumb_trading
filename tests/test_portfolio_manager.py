@@ -3,7 +3,7 @@ PortfolioManager 단위 테스트
 """
 import unittest
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import config
 from portfolio.portfolio_manager import (

@@ -6,7 +6,6 @@ from unittest.mock import MagicMock, patch
 
 from analyzer.analyzer import AnalysisReport
 from learning.adaptation_rules import (
-    AdaptationProposal,
     evaluate_all_rules,
     rule_param_tune,
     rule_position_size,
