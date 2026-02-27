@@ -1,0 +1,90 @@
+{
+  "version": "1.0",
+  "description": "bithumb-trading-bot 스킬 자동 활성화 규칙",
+  "skills": {
+    "strategy-guidelines": {
+      "description": "전략 작성/수정 시 strategy/GUIDE.md 참고 강제",
+      "enforcement": "suggest",
+      "priority": "high",
+      "promptTriggers": {
+        "keywords": ["전략", "strategy", "RSI", "신호", "signal", "BUY", "SELL", "HOLD", "oversold", "overbought", "EMA", "ATR"],
+        "intentPatterns": ["새.*전략", "전략.*수정", "전략.*추가", "매수.*조건", "매도.*조건", "신호.*생성"]
+      },
+      "fileTriggers": {
+        "pathPatterns": ["strategy/"],
+        "contentMarkers": ["BaseStrategy", "generate_signal", "SignalContext"]
+      },
+      "guidePath": "strategy/GUIDE.md"
+    },
+    "exchange-guidelines": {
+      "description": "빗썸 API 호출 시 exchange/GUIDE.md 참고 강제",
+      "enforcement": "suggest",
+      "priority": "high",
+      "promptTriggers": {
+        "keywords": ["빗썸", "bithumb", "API", "주문", "매수", "매도", "시세", "OHLCV", "호가", "잔고"],
+        "intentPatterns": ["API.*호출", "주문.*실행", "시세.*조회", "잔고.*확인"]
+      },
+      "fileTriggers": {
+        "pathPatterns": ["exchange/"],
+        "contentMarkers": ["BithumbClient", "pybithumb", "_retry"]
+      },
+      "guidePath": "exchange/GUIDE.md"
+    },
+    "backtest-guidelines": {
+      "description": "백테스트/그리드서치 작업 시 backtest/GUIDE.md 참고 강제",
+      "enforcement": "suggest",
+      "priority": "high",
+      "promptTriggers": {
+        "keywords": ["백테스트", "backtest", "그리드서치", "grid_search", "파라미터", "최적화"],
+        "intentPatterns": ["백테스트.*실행", "파라미터.*탐색", "그리드서치.*돌려", "과거.*데이터"]
+      },
+      "fileTriggers": {
+        "pathPatterns": ["backtest/"],
+        "contentMarkers": ["BacktestEngine", "GridSearchResult", "DataFetcher"]
+      },
+      "guidePath": "backtest/GUIDE.md"
+    },
+    "risk-guidelines": {
+      "description": "리스크 관련 작업 시 risk/GUIDE.md 참고 강제",
+      "enforcement": "block",
+      "priority": "critical",
+      "promptTriggers": {
+        "keywords": ["손절", "익절", "MDD", "리스크", "stop_loss", "take_profit", "drawdown"],
+        "intentPatterns": ["손절.*변경", "익절.*조정", "MDD.*한도", "리스크.*수정"]
+      },
+      "fileTriggers": {
+        "pathPatterns": ["risk/"],
+        "contentMarkers": ["RiskManager", "stop_loss", "take_profit", "max_drawdown"]
+      },
+      "guidePath": "risk/GUIDE.md"
+    },
+    "logger-guidelines": {
+      "description": "거래 로깅 관련 작업 시 logger/GUIDE.md 참고 강제",
+      "enforcement": "suggest",
+      "priority": "medium",
+      "promptTriggers": {
+        "keywords": ["로그", "기록", "거래기록", "trade_logger", "SQLite", "DB"],
+        "intentPatterns": ["거래.*기록", "로그.*추가", "DB.*수정", "테이블.*변경"]
+      },
+      "fileTriggers": {
+        "pathPatterns": ["logger/"],
+        "contentMarkers": ["TradeLogger", "sqlite3", "entries", "exits", "events"]
+      },
+      "guidePath": "logger/GUIDE.md"
+    },
+    "analyzer-guidelines": {
+      "description": "분석 관련 작업 시 analyzer/GUIDE.md 참고 강제",
+      "enforcement": "suggest",
+      "priority": "medium",
+      "promptTriggers": {
+        "keywords": ["분석", "리포트", "승률", "성과", "analyzer", "report"],
+        "intentPatterns": ["분석.*실행", "리포트.*생성", "성과.*확인", "개선.*제안"]
+      },
+      "fileTriggers": {
+        "pathPatterns": ["analyzer/"],
+        "contentMarkers": ["TradeAnalyzer", "AnalysisReport"]
+      },
+      "guidePath": "analyzer/GUIDE.md"
+    }
+  }
+}

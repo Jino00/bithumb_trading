@@ -1,0 +1,11 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+.git/
+.claude/
+logger/trades.db
+bot.log
+*.egg-info/
+.DS_Store

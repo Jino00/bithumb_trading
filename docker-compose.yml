@@ -1,0 +1,24 @@
+version: "3.8"
+
+services:
+  bot:
+    build: .
+    container_name: bithumb-bot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./logger:/app/logger    # DB 영속화
+      - ./bot.log:/app/bot.log  # 로그 영속화
+    command: ["python", "main.py", "--paper"]
+
+  dashboard:
+    build: .
+    container_name: bithumb-dashboard
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./logger:/app/logger
+    command: ["streamlit", "run", "dashboard/app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+    depends_on:
+      - bot
