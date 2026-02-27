@@ -63,5 +63,28 @@ PAPER_INITIAL_KRW = float(os.getenv("PAPER_INITIAL_KRW", "1000000"))
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
+# ── 적응형 학습 설정 ──────────────────────────────────────
+ADAPTIVE_ENABLED = os.getenv("ADAPTIVE_ENABLED", "true").lower() == "true"
+ADAPTIVE_INTERVAL_HOURS = 6              # 적응 사이클 주기 (시간)
+ADAPTIVE_MIN_TRADES = 10                 # 분석에 필요한 최소 완료 거래 수
+ADAPTIVE_POSITION_MIN_MULT = 0.3         # 포지션 최소 배율
+ADAPTIVE_POSITION_MAX_MULT = 1.5         # 포지션 최대 배율
+ADAPTIVE_BAD_HOUR_WIN_RATE = 40.0        # 시간대 차단 기준 승률 %
+ADAPTIVE_DOWNTREND_WIN_RATE = 45.0       # 하락 추세 차단 기준 승률 %
+ADAPTIVE_HIGH_VOL_WIN_RATE = 40.0        # 고변동성 포지션 축소 기준 승률 %
+ADAPTIVE_CONSEC_LOSS_THRESHOLD = 5       # 연속 손실 포지션 축소 기준
+
+# ── 멀티코인 포트폴리오 설정 ──────────────────────────────
+MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", "5"))              # 최대 동시 포지션 수
+PORTFOLIO_MDD_PCT = float(os.getenv("PORTFOLIO_MDD_PCT", "25.0")) # 포트폴리오 MDD 한도 %
+PER_COIN_ALLOCATION_PCT = 100.0 / MAX_POSITIONS                   # 코인당 자본 비율 % (자동 계산)
+SCAN_INTERVAL_MINUTES = 30                                        # 스크리너 주기 (분)
+BLACKLIST_TTL_HOURS = 24                                          # 게이트 실패 코인 차단 시간
+
+# ── 스크리너 설정 ────────────────────────────────────────────
+SCREENER_MIN_VOLUME_KRW = float(os.getenv("SCREENER_MIN_VOLUME_KRW", "1000000000"))  # 10억원
+SCREENER_MIN_RANGE_PCT = float(os.getenv("SCREENER_MIN_RANGE_PCT", "2.0"))
+SCREENER_TOP_VOLUME_N = int(os.getenv("SCREENER_TOP_VOLUME_N", "30"))
+
 # ── DB 경로 ───────────────────────────────────────────────
 DB_PATH = os.path.join(os.path.dirname(__file__), "logger", "trades.db")

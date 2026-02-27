@@ -111,3 +111,29 @@ class TelegramNotifier:
 
     def notify_error(self, error: str) -> None:
         self.send(f"<b>오류 발생</b>\n{error}")
+
+    # ── 포트폴리오 (멀티코인) 알림 ───────────────────────────
+
+    def notify_coin_activated(
+        self, coin: str, params: dict, win_rate: float, pf: float, range_pct: float
+    ) -> None:
+        self.send(
+            f"<b>코인 활성화</b>\n"
+            f"코인: {coin}\n"
+            f"파라미터: RSI({params.get('period')},{params.get('oversold')},{params.get('overbought')})\n"
+            f"백테스트 승률: {win_rate:.1f}%\n"
+            f"PF: {pf:.2f}\n"
+            f"변동폭: {range_pct:.1f}%"
+        )
+
+    def notify_coin_deactivated(self, coin: str, reason: str, draining: bool = False) -> None:
+        status = "드레인 모드" if draining else "즉시 제거"
+        self.send(
+            f"<b>코인 비활성화</b>\n"
+            f"코인: {coin}\n"
+            f"사유: {reason}\n"
+            f"상태: {status}"
+        )
+
+    def notify_portfolio_status(self, status_text: str) -> None:
+        self.send(f"<b>포트폴리오 현황</b>\n<pre>{status_text}</pre>")

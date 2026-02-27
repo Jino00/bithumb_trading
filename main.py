@@ -2,16 +2,24 @@
 bithumb-trading-bot 메인 실행 파일
 
 사용법:
-  python main.py              # 봇 실행 (백테스트 → 게이트 → 실전)
-  python main.py --paper      # 페이퍼 트레이딩 모드 (실제 주문 없이 시뮬레이션)
-  python main.py --backtest   # 백테스트 + 그리드서치만 실행하고 종료
+  python main.py                    # 멀티 코인 모드 (기본값)
+  python main.py --single           # 단일 코인 모드 (기존 호환)
+  python main.py --paper            # 멀티 코인 페이퍼 트레이딩
+  python main.py --single --paper   # 단일 코인 페이퍼 트레이딩
+  python main.py --backtest         # 백테스트 + 그리드서치만 실행
 
-startup() 실행 순서:
+startup() 실행 순서 (단일 코인):
   1. 1년 과거 데이터 수집
   2. 그리드서치로 최적 파라미터 탐색
   3. StrategyGate 4조건 검증 (미통과 시 즉시 종료)
   4. 승인된 전략으로 스케줄러 기동
   5. 매 사이클마다 실전 승률 모니터링 (65% 이하 시 자동 비활성화)
+
+startup_multi() 실행 순서 (멀티 코인):
+  1. 공유 자원 생성 (client, trade_logger, notifier)
+  2. PortfolioManager 초기화
+  3. 초기 스캔 + 코인 활성화
+  4. 멀티코인 스케줄러 기동
 """
 import argparse
 import atexit
@@ -31,10 +39,14 @@ from backtest.backtest_engine import BacktestEngine
 from backtest.data_fetcher import DataFetcher
 from exchange.bithumb_client import BithumbClient
 from exchange.paper_client import PaperClient
+from learning.adaptive_engine import AdaptiveEngine
+from learning.learning_log import LearningLog
 from logger.trade_logger import TradeLogger
 from notifier.telegram_notifier import TelegramNotifier
 from risk.risk_manager import RiskManager
-from scheduler.schedule_config import setup_openclaw_schedule, setup_schedule
+from portfolio.portfolio_manager import PortfolioManager
+from scheduler.schedule_config import setup_multi_coin_schedule, setup_openclaw_schedule, setup_schedule
+from screener.coin_screener import CoinScreener
 from strategy.rsi_strategy import RSIStrategy, SignalContext
 from strategy.strategy_gate import StrategyGate
 
@@ -108,14 +120,18 @@ class TradingBot:
         risk_manager: RiskManager,
         trade_logger: TradeLogger,
         live_monitor: LiveMonitor,
+        coin: str = "BTC",
         notifier: Optional[TelegramNotifier] = None,
+        adaptive_engine: Optional[AdaptiveEngine] = None,
     ) -> None:
+        self.coin = coin
         self.client = client
         self.strategy = strategy
         self.risk_manager = risk_manager
         self.trade_logger = trade_logger
         self.live_monitor = live_monitor
         self.notifier = notifier
+        self.adaptive_engine = adaptive_engine
 
         self._active: bool = True
         self._current_entry_id: Optional[int] = None
@@ -127,7 +143,7 @@ class TradingBot:
 
     def run_cycle(self) -> None:
         """한 사이클: 시세 → 신호 → 리스크 체크 → 주문 → 로그"""
-        coin = config.TRADE_COIN
+        coin = self.coin
 
         if not self._active:
             logger.warning("봇이 비활성화 상태입니다.")
@@ -187,6 +203,17 @@ class TradingBot:
 
             # 5) 포지션 없음: 진입 체크
             elif ctx.signal == "BUY":
+                # 적응형 필터 체크
+                if self.adaptive_engine:
+                    blocked, reason = self.adaptive_engine.should_block_buy(
+                        hour=datetime.now().hour, trend=ctx.trend
+                    )
+                    if blocked:
+                        logger.info(f"[Adaptive] 매수 차단: {reason}")
+                        self.trade_logger.log_event(
+                            "BUY_BLOCKED", coin, {"reason": reason, "rsi": ctx.rsi_value}
+                        )
+                        return
                 self._execute_buy(coin, current_price, ctx)
 
         except Exception as e:
@@ -201,7 +228,12 @@ class TradingBot:
         self, coin: str, price: float, ctx: SignalContext
     ) -> None:
         """매수 주문 실행 및 로그"""
-        amount = config.TRADE_AMOUNT / price
+        trade_krw = (
+            self.adaptive_engine.get_trade_amount(config.TRADE_AMOUNT)
+            if self.adaptive_engine
+            else config.TRADE_AMOUNT
+        )
+        amount = trade_krw / price
         try:
             result = self.client.buy(coin, amount)
         except Exception as e:
@@ -248,7 +280,7 @@ class TradingBot:
             pnl_pct=pnl_pct,
             stop_loss_pct=config.STOP_LOSS_PCT,
             take_profit_pct=config.TAKE_PROFIT_PCT,
-            overbought=config.RSI_OVERBOUGHT,
+            overbought=self.strategy.overbought,
         )
 
         hold_minutes = (
@@ -298,7 +330,7 @@ class TradingBot:
 
     def _recover_open_position(self) -> None:
         """봇 재시작 시 미청산 포지션을 DB에서 복구한다."""
-        open_entry = self.trade_logger.get_open_entry(config.TRADE_COIN)
+        open_entry = self.trade_logger.get_open_entry(self.coin)
         if open_entry:
             self._current_entry_id = open_entry["id"]
             self._entry_price = open_entry["price"]
@@ -436,15 +468,30 @@ def startup(paper: bool = False) -> Optional[TradingBot]:
                 f"oversold={live_strategy.oversold}, "
                 f"overbought={live_strategy.overbought})")
 
-    # ── Step 5: TradingBot 생성 ────────────────────────────
+    # ── Step 5: 적응형 학습 엔진 초기화 ────────────────────
     notifier = TelegramNotifier(config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID)
+    learning_log = LearningLog(config.DB_PATH)
+    adaptive_engine = AdaptiveEngine(
+        strategy=live_strategy,
+        trade_logger=trade_logger,
+        learning_log=learning_log,
+        gate=gate,
+        client=client,
+        notifier=notifier,
+        coin=config.TRADE_COIN,
+    )
+    logger.info("[Step 5] 적응형 학습 엔진 초기화 완료")
+
+    # ── Step 6: TradingBot 생성 ────────────────────────────
     bot = TradingBot(
         client=client,
         strategy=live_strategy,
         risk_manager=risk_manager,
         trade_logger=trade_logger,
         live_monitor=live_monitor,
+        coin=config.TRADE_COIN,
         notifier=notifier,
+        adaptive_engine=adaptive_engine,
     )
     mode_label = "PAPER" if paper else "LIVE"
     notifier.notify_bot_start(mode_label, config.TRADE_COIN)
@@ -491,7 +538,8 @@ def _cleanup(bot: Optional["TradingBot"], trade_logger: Optional[TradeLogger]) -
 
 # ── 메인 루프 ─────────────────────────────────────────────────────────────────
 
-def main(paper: bool = False) -> None:
+def main_single(paper: bool = False) -> None:
+    """단일 코인 모드 메인 루프 (기존 호환)."""
     global _shutdown_requested
 
     # 시그널 핸들러 등록
@@ -566,6 +614,11 @@ def main(paper: bool = False) -> None:
                     "WEEKLY_GRIDSEARCH", config.TRADE_COIN,
                     {"best_params": gs.best_params, "win_rate": gs.best_result.win_rate},
                 )
+                # 적응형 엔진에 결과 전달 (다음 adaptation_cycle에서 평가)
+                if bot.adaptive_engine:
+                    bot.adaptive_engine.receive_gridsearch_result(
+                        gs.best_params, gs.best_result
+                    )
         except Exception as e:
             logger.error(f"[Weekly] 그리드서치 오류: {e}")
 
@@ -591,14 +644,25 @@ def main(paper: bool = False) -> None:
         except Exception as e:
             logger.error(f"[Report] 리포트 생성 오류: {e}")
 
+    def adaptation_job():
+        """매 6시간: 적응형 학습 사이클"""
+        if bot.adaptive_engine:
+            logger.info("[Adaptive] 적응형 학습 사이클 시작")
+            try:
+                proposals = bot.adaptive_engine.run_adaptation_cycle()
+                logger.info(f"[Adaptive] 사이클 완료: {len(proposals)}건 적용")
+            except Exception as e:
+                logger.error(f"[Adaptive] 학습 사이클 오류: {e}")
+
     setup_openclaw_schedule(
         trading_job=trading_job,
         performance_job=performance_job,
         backtest_job=backtest_job,
         gridsearch_job=gridsearch_job,
         report_job=report_job,
+        adaptation_job=adaptation_job,
     )
-    logger.info("OpenClaw 스케줄러 기동 (5-job)")
+    logger.info("OpenClaw 스케줄러 기동 (6-job)")
 
     # 즉시 1회 실행
     trading_job()
@@ -622,6 +686,185 @@ def _print_analysis(trade_logger: TradeLogger) -> None:
             logger.info("\n" + analyzer.report())
     except Exception as e:
         logger.error(f"분석 리포트 출력 실패: {e}")
+
+
+# ── 멀티코인 모드 ──────────────────────────────────────────────────────────────
+
+def startup_multi(paper: bool = False) -> Optional[PortfolioManager]:
+    """
+    멀티코인 모드 시작.
+
+    1. 공유 자원 생성 (client, trade_logger, notifier)
+    2. PortfolioManager 초기화
+    3. 초기 스캔 + 코인 활성화
+
+    Returns:
+        PortfolioManager 인스턴스 (성공) | None (실패)
+    """
+    mode_label = "[PAPER] 페이퍼 트레이딩" if paper else "실전 거래"
+    logger.info("=" * 60)
+    logger.info(f"  bithumb-trading-bot 멀티코인 모드 시작 ({mode_label})")
+    logger.info("=" * 60)
+
+    # 공유 자원 생성
+    real_client = BithumbClient(config.BITHUMB_API_KEY, config.BITHUMB_SECRET_KEY)
+    if paper:
+        client = PaperClient(real_client, initial_krw=config.PAPER_INITIAL_KRW)
+    else:
+        client = real_client
+
+    trade_logger = TradeLogger(config.DB_PATH)
+    notifier = TelegramNotifier(config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID)
+
+    # 스크리너 생성
+    screener = CoinScreener(
+        min_volume_krw=config.SCREENER_MIN_VOLUME_KRW,
+        min_range_pct=config.SCREENER_MIN_RANGE_PCT,
+        top_volume_n=config.SCREENER_TOP_VOLUME_N,
+    )
+
+    # PortfolioManager 생성
+    portfolio = PortfolioManager(
+        client=client,
+        trade_logger=trade_logger,
+        notifier=notifier,
+        screener=screener,
+        max_positions=config.MAX_POSITIONS,
+        portfolio_mdd_pct=config.PORTFOLIO_MDD_PCT,
+        per_coin_allocation_pct=config.PER_COIN_ALLOCATION_PCT,
+        blacklist_ttl_hours=config.BLACKLIST_TTL_HOURS,
+    )
+
+    # 초기 스캔
+    logger.info("[Startup] 초기 코인 스캔 시작")
+    activated = portfolio.scan_and_update()
+    if activated:
+        logger.info(f"[Startup] 초기 활성화: {', '.join(activated)}")
+    else:
+        logger.warning("[Startup] 초기 스캔에서 활성화된 코인 없음 — 다음 스캔까지 대기")
+
+    mode = "PAPER" if paper else "LIVE"
+    notifier.send(
+        f"<b>멀티코인 봇 시작</b>\n"
+        f"모드: {mode}\n"
+        f"최대 포지션: {config.MAX_POSITIONS}\n"
+        f"활성 코인: {', '.join(portfolio.active_coins) or '대기 중'}"
+    )
+
+    return portfolio
+
+
+def _cleanup_multi(
+    portfolio: Optional[PortfolioManager],
+    trade_logger: Optional[TradeLogger],
+) -> None:
+    """멀티코인 모드 종료 시 모든 활성 코인의 상태를 기록한다."""
+    logger.info("멀티코인 클린업 시작...")
+    if portfolio:
+        for coin in portfolio.all_coins:
+            if portfolio.has_position(coin):
+                logger.warning(f"미청산 포지션: {coin}")
+                if trade_logger:
+                    trade_logger.log_event(
+                        "SHUTDOWN_WITH_POSITION", coin,
+                        {"reason": "graceful shutdown (multi)"},
+                    )
+    if trade_logger:
+        trade_logger.log_event("BOT_SHUTDOWN", "PORTFOLIO", {"reason": "graceful shutdown"})
+    if portfolio and portfolio._slots:
+        first_slot = next(iter(portfolio._slots.values()), None)
+        if first_slot and hasattr(first_slot.bot, "notifier") and first_slot.bot.notifier:
+            first_slot.bot.notifier.notify_bot_stop("멀티코인 graceful shutdown")
+    logger.info("멀티코인 봇 종료 완료")
+
+
+def main_multi(paper: bool = False) -> None:
+    """멀티코인 모드 메인 루프."""
+    global _shutdown_requested
+
+    signal.signal(signal.SIGINT, _handle_shutdown)
+    signal.signal(signal.SIGTERM, _handle_shutdown)
+
+    portfolio = startup_multi(paper=paper)
+    if portfolio is None:
+        logger.error("멀티코인 봇 초기화 실패 — 종료")
+        sys.exit(1)
+
+    atexit.register(_cleanup_multi, portfolio, portfolio.trade_logger)
+
+    # ── 멀티코인 스케줄 잡 정의 ─────────────────────────────
+
+    def trading_job():
+        """매 5분: 모든 활성 코인 트레이딩 사이클"""
+        portfolio.run_all_cycles()
+
+    def scan_job():
+        """매 30분: 스크리너 실행 + 코인 활성화/비활성화"""
+        try:
+            scores = portfolio.screener.scan()
+            # 스크리너 탈락 코인 비활성화
+            deactivated = portfolio.check_and_deactivate_stale(scores)
+            if deactivated:
+                logger.info(f"[Scan] 비활성화: {', '.join(deactivated)}")
+            # 신규 코인 활성화
+            activated = portfolio.scan_and_update()
+            if activated:
+                logger.info(f"[Scan] 신규 활성화: {', '.join(activated)}")
+            logger.info(f"[Scan] 포트폴리오: {portfolio.status_text()}")
+        except Exception as e:
+            logger.error(f"[Scan] 스캔 오류: {e}")
+
+    def performance_job():
+        """매 1시간: 포트폴리오 성과 집계"""
+        logger.info(f"[Performance]\n{portfolio.status_text()}")
+        if portfolio.notifier:
+            portfolio.notifier.notify_portfolio_status(portfolio.status_text())
+
+    def adaptation_job():
+        """매 6시간: 모든 활성 코인 적응형 학습"""
+        portfolio.run_all_adaptations()
+
+    def report_job():
+        """매일 09:00: 포트폴리오 리포트"""
+        logger.info("[Report] 포트폴리오 일일 리포트 생성")
+        try:
+            trades = portfolio.trade_logger.get_completed_trades()
+            if trades:
+                analyzer = TradeAnalyzer(trades)
+                report_text = analyzer.report()
+                logger.info("\n" + report_text)
+                if portfolio.notifier:
+                    r = analyzer.analyze()
+                    portfolio.notifier.send(
+                        f"<b>포트폴리오 일일 리포트</b>\n"
+                        f"총 거래: {r.total_trades}\n"
+                        f"승률: {r.win_rate:.1f}%\n"
+                        f"PF: {r.profit_factor:.2f}\n"
+                        f"활성 코인: {', '.join(portfolio.active_coins)}"
+                    )
+        except Exception as e:
+            logger.error(f"[Report] 리포트 오류: {e}")
+
+    setup_multi_coin_schedule(
+        trading_job=trading_job,
+        scan_job=scan_job,
+        performance_job=performance_job,
+        adaptation_job=adaptation_job,
+        report_job=report_job,
+    )
+    logger.info("멀티코인 스케줄러 기동 (5-job)")
+
+    # 즉시 1회 실행
+    trading_job()
+
+    while not _shutdown_requested:
+        schedule.run_pending()
+        time.sleep(1)
+
+    # 종료 처리
+    logger.info("멀티코인 메인 루프 종료 — 클린업 실행")
+    _cleanup_multi(portfolio, portfolio.trade_logger)
+    atexit.unregister(_cleanup_multi)
 
 
 def run_backtest_only(interval: str = "24h") -> int:
@@ -702,11 +945,18 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 예시:
-  python main.py                           봇 실행 (백테스트 → 게이트 → 실전)
-  python main.py --paper                   페이퍼 트레이딩 모드
+  python main.py                           멀티 코인 모드 (기본값)
+  python main.py --single                  단일 코인 모드 (기존 호환)
+  python main.py --paper                   멀티 코인 페이퍼 트레이딩
+  python main.py --single --paper          단일 코인 페이퍼 트레이딩
   python main.py --backtest                백테스트 (24h봉, 빠른 확인)
   python main.py --backtest --interval 1h  백테스트 (1h봉, 신호 건수 충분)
         """,
+    )
+    parser.add_argument(
+        "--single",
+        action="store_true",
+        help="단일 코인 모드 (기존 호환, config.TRADE_COIN 사용)",
     )
     parser.add_argument(
         "--backtest",
@@ -730,4 +980,7 @@ if __name__ == "__main__":
         sys.exit(run_backtest_only(interval=args.interval))
     else:
         paper_mode = args.paper or config.PAPER_TRADING
-        main(paper=paper_mode)
+        if args.single:
+            main_single(paper=paper_mode)
+        else:
+            main_multi(paper=paper_mode)
