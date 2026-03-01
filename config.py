@@ -41,6 +41,16 @@ ATR_HIGH_VOLATILITY = 3.0       # 고변동성 ATR% 기준
 ATR_MEDIUM_VOLATILITY = 1.0     # 중변동성 ATR% 기준
 EMA_TREND_THRESHOLD = 0.5       # EMA 크로스 추세 판정 % 기준
 
+# ── 시장 상태 감지 (Market Regime Detection) ──────────────────
+ADX_PERIOD = 14                         # ADX 계산 기간
+ADX_TREND_THRESHOLD = 25.0              # ADX ≥ 25 → 추세장
+ADX_RANGE_THRESHOLD = 20.0              # ADX < 20 → 횡보장
+
+# ── 그리드 전략 (횡보장용) ────────────────────────────────────
+GRID_COUNT = 10                         # 그리드 개수
+GRID_RANGE_PERIOD = 50                  # 범위 계산에 쓰는 캔들 수
+GRID_PROFIT_PER_GRID_PCT = 0.5          # 그리드당 목표 수익 %
+
 # ── 호가창 설정 ─────────────────────────────────────────────
 ORDERBOOK_LEVELS = 5            # 호가창 분석 레벨 수
 

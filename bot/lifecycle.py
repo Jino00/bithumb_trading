@@ -16,6 +16,9 @@ from notifier.telegram_notifier import TelegramNotifier
 from portfolio.portfolio_manager import PortfolioManager
 from risk.risk_manager import RiskManager
 from screener.coin_screener import CoinScreener
+from strategy.grid_strategy import GridStrategy
+from strategy.market_regime import MarketRegimeDetector
+from strategy.regime_strategy import RegimeAwareStrategy
 from strategy.rsi_strategy import RSIStrategy
 from strategy.strategy_gate import StrategyGate
 
@@ -131,22 +134,37 @@ def startup(paper: bool = False) -> Optional[TradingBot]:
     if best_params is None:
         return None
 
-    # Step 4: 전략 배포
-    logger.info("[Step 4] 전략 배포")
-    live_strategy = RSIStrategy(
+    # Step 4: 전략 배포 (RSI + Grid → RegimeAwareStrategy)
+    logger.info("[Step 4] 전략 배포 — 시장 상태 적응형 복합 전략")
+    rsi_strategy = RSIStrategy(
         period=best_params.get("period", config.RSI_PERIOD),
         oversold=best_params.get("oversold", config.RSI_OVERSOLD),
         overbought=best_params.get("overbought", config.RSI_OVERBOUGHT),
     )
+    grid_strategy = GridStrategy(
+        grid_count=config.GRID_COUNT,
+        range_period=config.GRID_RANGE_PERIOD,
+        profit_per_grid_pct=config.GRID_PROFIT_PER_GRID_PCT,
+    )
+    detector = MarketRegimeDetector(
+        adx_period=config.ADX_PERIOD,
+        adx_trend_threshold=config.ADX_TREND_THRESHOLD,
+        adx_range_threshold=config.ADX_RANGE_THRESHOLD,
+    )
+    live_strategy = RegimeAwareStrategy(rsi_strategy, grid_strategy, detector)
+
     trade_logger.log_event(
         "STRATEGY_DEPLOYED", config.TRADE_COIN,
         {"params": best_params, "backtest_win_rate": gs.best_result.win_rate,
          "backtest_pf": gs.best_result.profit_factor,
-         "backtest_mdd": gs.best_result.max_drawdown_pct},
+         "backtest_mdd": gs.best_result.max_drawdown_pct,
+         "strategy_type": "RegimeAwareStrategy"},
     )
     logger.info(
-        f"  전략 배포 완료: RSI(period={live_strategy.period}, "
-        f"oversold={live_strategy.oversold}, overbought={live_strategy.overbought})"
+        f"  전략 배포 완료: RegimeAware("
+        f"RSI(period={rsi_strategy.period}, oversold={rsi_strategy.oversold}, "
+        f"overbought={rsi_strategy.overbought}), "
+        f"Grid(count={grid_strategy.grid_count}, range={grid_strategy.range_period}))"
     )
 
     # Step 5: 적응형 학습 + 봇 생성

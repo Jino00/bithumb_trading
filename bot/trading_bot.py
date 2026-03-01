@@ -9,6 +9,7 @@ from logger.trade_logger import TradeLogger
 from notifier.telegram_notifier import TelegramNotifier
 from learning.adaptive_engine import AdaptiveEngine
 from risk.risk_manager import RiskManager
+from strategy.base_strategy import BaseStrategy
 from strategy.rsi_strategy import RSIStrategy, SignalContext
 
 logger = logging.getLogger("bot.trading_bot")
@@ -67,7 +68,7 @@ class TradingBot:
     def __init__(
         self,
         client,
-        strategy: RSIStrategy,
+        strategy: BaseStrategy,
         risk_manager: RiskManager,
         trade_logger: TradeLogger,
         live_monitor: LiveMonitor,

@@ -23,6 +23,7 @@ from learning.adaptation_rules import (
 )
 from learning.learning_log import LearningLog
 from logger.trade_logger import TradeLogger
+from strategy.base_strategy import BaseStrategy
 from strategy.rsi_strategy import RSIStrategy
 from strategy.strategy_gate import BacktestResult, StrategyGate
 
@@ -55,7 +56,7 @@ class AdaptiveEngine:
 
     def __init__(
         self,
-        strategy: RSIStrategy,
+        strategy: BaseStrategy,
         trade_logger: TradeLogger,
         learning_log: LearningLog,
         gate: StrategyGate,
@@ -273,10 +274,11 @@ class AdaptiveEngine:
 
         try:
             # 새 파라미터로 백테스트
+            rsi = self._get_rsi_strategy()
             test_strategy = RSIStrategy(
-                period=new_params.get("period", self.strategy.period),
-                oversold=new_params.get("oversold", self.strategy.oversold),
-                overbought=new_params.get("overbought", self.strategy.overbought),
+                period=new_params.get("period", rsi.period),
+                oversold=new_params.get("oversold", rsi.oversold),
+                overbought=new_params.get("overbought", rsi.overbought),
             )
             fetcher = DataFetcher(self.client)
             df = fetcher.fetch(
@@ -323,17 +325,24 @@ class AdaptiveEngine:
             return False
 
     def _apply_param_tune(self, proposal: AdaptationProposal) -> bool:
-        """전략 파라미터를 변경한다."""
+        """전략 파라미터를 변경한다. RegimeAwareStrategy면 내부 RSI에 접근."""
         new = proposal.after_value
-        self.strategy.period = new["period"]
-        self.strategy.oversold = new["oversold"]
-        self.strategy.overbought = new["overbought"]
+        target = self._get_rsi_strategy()
+        target.period = new["period"]
+        target.oversold = new["oversold"]
+        target.overbought = new["overbought"]
         logger.info(
             f"[PARAM_TUNE] 전략 파라미터 변경: "
             f"period={new['period']} oversold={new['oversold']} "
             f"overbought={new['overbought']}"
         )
         return True
+
+    def _get_rsi_strategy(self) -> RSIStrategy:
+        """현재 전략에서 RSIStrategy를 추출한다."""
+        if hasattr(self.strategy, "rsi_strategy"):
+            return self.strategy.rsi_strategy
+        return self.strategy
 
     def _apply_time_filter(self, proposal: AdaptationProposal) -> bool:
         """저성과 시간대 차단을 적용한다."""
@@ -393,9 +402,9 @@ class AdaptiveEngine:
                 else None
             ),
             "strategy_params": {
-                "period": self.strategy.period,
-                "oversold": self.strategy.oversold,
-                "overbought": self.strategy.overbought,
+                "period": self._get_rsi_strategy().period,
+                "oversold": self._get_rsi_strategy().oversold,
+                "overbought": self._get_rsi_strategy().overbought,
             },
             "pending_gridsearch": self._pending_best_params is not None,
         }
