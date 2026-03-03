@@ -6,6 +6,7 @@ import config
 from analyzer.analyzer import TradeAnalyzer
 from backtest.backtest_engine import BacktestEngine
 from backtest.data_fetcher import DataFetcher
+from dashboard.shared_state import SharedStateWriter
 from logger.trade_logger import TradeLogger
 from strategy.strategy_gate import StrategyGate
 
@@ -34,6 +35,7 @@ def make_trading_job(bot) -> Callable:
             bot.run_cycle()
         else:
             logger.warning("봇 비활성화 상태 — 사이클 건너뜀")
+        SharedStateWriter.update_from_single_bot(bot)
     return job
 
 
@@ -135,6 +137,7 @@ def make_multi_trading_job(portfolio) -> Callable:
     """매 5분: 모든 활성 코인 트레이딩 사이클"""
     def job():
         portfolio.run_all_cycles()
+        SharedStateWriter.update_from_portfolio(portfolio)
     return job
 
 

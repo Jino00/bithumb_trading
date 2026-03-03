@@ -11,6 +11,7 @@ bithumb-trading-bot 메인 실행 파일
 import argparse
 import atexit
 import logging
+import multiprocessing
 import signal
 import sys
 import time
@@ -156,7 +157,34 @@ if __name__ == "__main__":
         choices=["1m", "3m", "5m", "10m", "30m", "1h", "6h", "12h", "24h"],
         help="백테스트용 캔들 단위 (기본: 24h)",
     )
+    parser.add_argument(
+        "--dashboard", action="store_true",
+        help="웹 대시보드 서버를 함께 기동 (기본 포트: 8080)",
+    )
+    parser.add_argument(
+        "--dashboard-only", action="store_true",
+        help="봇 없이 대시보드 서버만 기동",
+    )
     args = parser.parse_args()
+
+    # ── 대시보드 전용 모드 ──
+    if args.dashboard_only:
+        from dashboard.server import run_dashboard
+        logger.info(f"대시보드 전용 모드 (port={config.DASHBOARD_PORT})")
+        run_dashboard(port=config.DASHBOARD_PORT)
+        sys.exit(0)
+
+    # ── 대시보드 백그라운드 기동 ──
+    dashboard_proc = None
+    if args.dashboard:
+        from dashboard.server import run_dashboard
+        dashboard_proc = multiprocessing.Process(
+            target=run_dashboard,
+            kwargs={"port": config.DASHBOARD_PORT},
+            daemon=True,
+        )
+        dashboard_proc.start()
+        logger.info(f"대시보드 서버 기동 (port={config.DASHBOARD_PORT}, pid={dashboard_proc.pid})")
 
     if args.backtest:
         sys.exit(run_backtest_only(interval=args.interval))

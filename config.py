@@ -98,3 +98,7 @@ SCREENER_TOP_VOLUME_N = int(os.getenv("SCREENER_TOP_VOLUME_N", "30"))
 
 # ── DB 경로 ───────────────────────────────────────────────
 DB_PATH = os.path.join(os.path.dirname(__file__), "logger", "trades.db")
+
+# ── 대시보드 설정 ─────────────────────────────────────────
+DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "8080"))
+DASHBOARD_STATE_PATH = os.path.join(os.path.dirname(__file__), "dashboard", "state.json")
