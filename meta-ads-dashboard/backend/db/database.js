@@ -216,6 +216,64 @@ function initTables() {
     );
   `);
 
+  // ─── Cafe24 연동 테이블 ───
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS cafe24_config (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      mall_id TEXT NOT NULL,
+      client_id TEXT NOT NULL,
+      client_secret TEXT NOT NULL,
+      redirect_uri TEXT DEFAULT 'http://localhost:3001/api/cafe24/callback',
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS cafe24_credentials (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      mall_id TEXT NOT NULL,
+      access_token TEXT NOT NULL,
+      refresh_token TEXT NOT NULL,
+      expires_at TEXT,
+      refresh_token_expires_at TEXT,
+      scopes TEXT,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS cafe24_orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_id TEXT UNIQUE NOT NULL,
+      order_date TEXT NOT NULL,
+      total_amount REAL NOT NULL,
+      item_count INTEGER DEFAULT 1,
+      product_names TEXT,
+      payment_method TEXT,
+      utm_source TEXT,
+      utm_campaign TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS published_campaigns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ad_copy_generation_id INTEGER NOT NULL,
+      copy_index INTEGER NOT NULL DEFAULT 0,
+      meta_campaign_id TEXT,
+      meta_adset_id TEXT,
+      meta_creative_id TEXT,
+      meta_ad_id TEXT,
+      campaign_name TEXT NOT NULL,
+      objective TEXT,
+      daily_budget INTEGER,
+      targeting TEXT,
+      page_id TEXT,
+      link_url TEXT,
+      status TEXT DEFAULT 'PAUSED',
+      publish_error TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (ad_copy_generation_id) REFERENCES ad_copy_generations(id) ON DELETE SET NULL
+    );
+  `);
+
   addColumnIfNotExists("campaigns", "meta_campaign_id", "TEXT");
   addColumnIfNotExists("campaigns", "source", "TEXT DEFAULT 'manual'");
 
@@ -223,6 +281,116 @@ function initTables() {
   addColumnIfNotExists("ad_copy_generations", "media_filename", "TEXT");
   addColumnIfNotExists("ad_copy_generations", "media_type", "TEXT");
   addColumnIfNotExists("ad_copy_generations", "media_emphasis", "TEXT");
+
+  // 캠페인 퍼블리시 연동
+  addColumnIfNotExists("ad_copy_generations", "published_campaign_id", "INTEGER");
+
+  // Gemini 영상 분석 결과 저장
+  addColumnIfNotExists("ad_copy_generations", "video_analysis_summary", "TEXT");
+  addColumnIfNotExists("ad_copy_generations", "has_video_analysis", "INTEGER DEFAULT 0");
+
+  // ─── Phase 4: 성과 히스토리 + 개선 추적 테이블 ───
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS campaign_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id INTEGER NOT NULL,
+      meta_campaign_id TEXT,
+      snapshot_date TEXT NOT NULL,
+      roas REAL, ctr REAL, cpc REAL, frequency REAL,
+      spend REAL, revenue REAL, purchases INTEGER,
+      cpa REAL, aov REAL,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(campaign_id, snapshot_date)
+    );
+
+    CREATE TABLE IF NOT EXISTS improvement_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id INTEGER NOT NULL,
+      action_type TEXT NOT NULL,
+      action_description TEXT NOT NULL,
+      before_roas REAL,
+      after_roas REAL,
+      before_ctr REAL,
+      after_ctr REAL,
+      result_verdict TEXT,
+      measured_at TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+
+  // Phase 1: ROAS 정상화 — 실제 매출/구매 데이터 컬럼
+  addColumnIfNotExists("campaigns", "revenue", "REAL DEFAULT 0");
+  addColumnIfNotExists("campaigns", "aov", "REAL DEFAULT 0");
+  addColumnIfNotExists("campaigns", "cpa", "REAL DEFAULT 0");
+  addColumnIfNotExists("campaigns", "purchase_count", "INTEGER DEFAULT 0");
+
+  // ─── Cafe24 자사몰 퍼널 데이터 (Meta Pixel 추적 이벤트) ───
+  addColumnIfNotExists("campaigns", "landing_page_views", "INTEGER DEFAULT 0");
+  addColumnIfNotExists("campaigns", "content_views", "INTEGER DEFAULT 0");
+  addColumnIfNotExists("campaigns", "add_to_cart_count", "INTEGER DEFAULT 0");
+  addColumnIfNotExists("campaigns", "initiate_checkout_count", "INTEGER DEFAULT 0");
+
+  // campaign_snapshots에도 퍼널 데이터 컬럼 추가
+  addColumnIfNotExists("campaign_snapshots", "landing_page_views", "INTEGER DEFAULT 0");
+  addColumnIfNotExists("campaign_snapshots", "content_views", "INTEGER DEFAULT 0");
+  addColumnIfNotExists("campaign_snapshots", "add_to_cart_count", "INTEGER DEFAULT 0");
+  addColumnIfNotExists("campaign_snapshots", "initiate_checkout_count", "INTEGER DEFAULT 0");
+
+  // campaign_snapshots에 클릭 수 추가 (퍼널 전환율 계산에 필요)
+  addColumnIfNotExists("campaign_snapshots", "clicks", "INTEGER DEFAULT 0");
+
+  // ─── 트렌드 인텔리전스: 동적 벤치마크 + 메트릭별 트렌드 ───
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS metric_benchmarks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      metric_name TEXT NOT NULL,
+      period TEXT NOT NULL,
+      sample_count INTEGER DEFAULT 0,
+      avg_value REAL DEFAULT 0,
+      median_value REAL DEFAULT 0,
+      p25_value REAL DEFAULT 0,
+      p75_value REAL DEFAULT 0,
+      p90_value REAL DEFAULT 0,
+      min_value REAL DEFAULT 0,
+      max_value REAL DEFAULT 0,
+      std_dev REAL DEFAULT 0,
+      computed_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(metric_name, period)
+    );
+
+    CREATE TABLE IF NOT EXISTS metric_trends (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id INTEGER NOT NULL,
+      metric_name TEXT NOT NULL,
+      trend_direction TEXT NOT NULL,
+      change_7d REAL DEFAULT 0,
+      change_14d REAL DEFAULT 0,
+      change_30d REAL DEFAULT 0,
+      moving_avg_7d REAL DEFAULT 0,
+      moving_avg_14d REAL DEFAULT 0,
+      moving_avg_30d REAL DEFAULT 0,
+      current_value REAL DEFAULT 0,
+      volatility REAL DEFAULT 0,
+      percentile_rank REAL DEFAULT 0,
+      computed_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(campaign_id, metric_name)
+    );
+
+    CREATE TABLE IF NOT EXISTS action_effectiveness (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      action_type TEXT NOT NULL,
+      diagnosis_stage TEXT NOT NULL,
+      times_applied INTEGER DEFAULT 0,
+      times_improved INTEGER DEFAULT 0,
+      times_unchanged INTEGER DEFAULT 0,
+      times_worsened INTEGER DEFAULT 0,
+      avg_roas_change REAL DEFAULT 0,
+      avg_ctr_change REAL DEFAULT 0,
+      success_rate REAL DEFAULT 0,
+      last_updated TEXT DEFAULT (datetime('now')),
+      UNIQUE(action_type, diagnosis_stage)
+    );
+  `);
 }
 
 function addColumnIfNotExists(table, column, type) {

@@ -18,6 +18,8 @@ import {
 import DashboardSummary from "./components/Dashboard";
 import AdPerformanceTable from "./components/AdPerformanceTable";
 import AIRecommendations from "./components/AIRecommendations";
+import FunnelChart from "./components/FunnelChart";
+import RoasTrendChart from "./components/RoasTrendChart";
 import CompetitorInsights from "./components/CompetitorInsights";
 import TrendsFeed from "./components/TrendsFeed";
 import CampaignEditor from "./components/CampaignEditor";
@@ -39,6 +41,9 @@ import {
   fetchCompetitors,
   fetchTrends,
   analyzeAll,
+  judgeAllCampaigns,
+  CampaignJudgment,
+  JudgeSummary,
   fetchMetaBusinesses,
   fetchBusinessAdAccounts,
   fetchMetaAdAccounts,
@@ -75,6 +80,9 @@ export default function App() {
   const [selectedBusinessId, setSelectedBusinessId] = useState<string>("");
   const [adAccounts, setAdAccounts] = useState<MetaAdAccount[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<string>("");
+  const [judgments, setJudgments] = useState<CampaignJudgment[]>([]);
+  const [judgeSummary, setJudgeSummary] = useState<JudgeSummary | null>(null);
+  const [judgingAll, setJudgingAll] = useState(false);
 
   const loadCampaigns = useCallback(async (period?: DatePeriod, accountId?: string) => {
     setLoadingCampaigns(true);
@@ -182,6 +190,21 @@ export default function App() {
     }
   };
 
+  const handleJudgeAll = async () => {
+    setJudgingAll(true);
+    try {
+      const result = await judgeAllCampaigns();
+      setJudgments(result.judgments || []);
+      setJudgeSummary(result.summary || null);
+      setLastUpdated(new Date().toISOString());
+      await loadCampaigns();
+    } catch (err) {
+      console.error("Failed to judge campaigns:", err);
+    } finally {
+      setJudgingAll(false);
+    }
+  };
+
   const handleDateRangeChange = (period: DatePeriod) => {
     setDateRange(period);
     loadCampaigns(period);
@@ -216,7 +239,9 @@ export default function App() {
               onAccountChange={handleAccountChange}
             />
             <AdPerformanceTable campaigns={filteredCampaigns} onEdit={setEditingCampaign} loading={loadingCampaigns} />
-            <AIRecommendations results={analysisResults} loading={analyzingAll} onAnalyzeAll={handleAnalyzeAll} />
+            <AIRecommendations results={analysisResults} loading={analyzingAll} onAnalyzeAll={handleAnalyzeAll} judgments={judgments} judgeSummary={judgeSummary} judgingLoading={judgingAll} onJudgeAll={handleJudgeAll} />
+            <FunnelChart judgments={judgments} />
+            <RoasTrendChart campaigns={filteredCampaigns} />
           </div>
         );
       case "campaigns":
@@ -232,7 +257,7 @@ export default function App() {
               </button>
             </div>
             <AdPerformanceTable campaigns={filteredCampaigns} onEdit={setEditingCampaign} loading={loadingCampaigns} />
-            <AIRecommendations results={analysisResults} loading={analyzingAll} onAnalyzeAll={handleAnalyzeAll} />
+            <AIRecommendations results={analysisResults} loading={analyzingAll} onAnalyzeAll={handleAnalyzeAll} judgments={judgments} judgeSummary={judgeSummary} judgingLoading={judgingAll} onJudgeAll={handleJudgeAll} />
           </div>
         );
       case "competitors":

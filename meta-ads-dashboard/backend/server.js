@@ -10,6 +10,8 @@ import metaRouter from "./routes/meta.js";
 import adLibraryRouter from "./routes/ad-library.js";
 import productsRouter from "./routes/products.js";
 import adCopyRouter from "./routes/ad-copy.js";
+import campaignPublishRouter from "./routes/campaign-publish.js";
+import cafe24Router from "./routes/cafe24.js";
 import { getDb } from "./db/database.js";
 import { startScheduler } from "./scheduler.js";
 
@@ -32,12 +34,16 @@ app.use("/api/meta", metaRouter);
 app.use("/api/ad-library", adLibraryRouter);
 app.use("/api/products", productsRouter);
 app.use("/api/ad-copy", adCopyRouter);
+app.use("/api/campaign-publish", campaignPublishRouter);
+app.use("/api/cafe24", cafe24Router);
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Meta Ads Intelligence API running on http://localhost:${PORT}`);
   startScheduler();
 });
+server.timeout = 600000;        // 10분 — 대용량 비디오 Meta 업로드 대비
+server.keepAliveTimeout = 620000;

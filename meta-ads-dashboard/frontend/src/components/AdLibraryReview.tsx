@@ -422,12 +422,12 @@ function ReviewDetail({ review }: { review: AdLibraryReviewType }) {
       )}
 
       {/* Recommended Adaptations */}
-      {review.raw_analysis?.recommended_adaptations?.length > 0 && (
+      {(review.raw_analysis?.recommended_adaptations?.length ?? 0) > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 p-4">
           <SectionHeader id="adaptations" icon={Sparkles} title="추천 적용 방안" iconColor="text-indigo-500" />
           {expandedSections.has("adaptations") && (
             <div className="space-y-3 ml-6">
-              {review.raw_analysis.recommended_adaptations.map((a, i) => (
+              {review.raw_analysis!.recommended_adaptations!.map((a, i) => (
                 <div key={i} className="p-3 bg-indigo-50 border border-indigo-100 rounded-lg">
                   <h4 className="text-sm font-medium text-gray-900 mb-1">{a.recommendation}</h4>
                   <p className="text-xs text-gray-600 mb-1">{a.rationale}</p>

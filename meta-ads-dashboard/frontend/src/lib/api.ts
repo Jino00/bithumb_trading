@@ -18,6 +18,15 @@ export interface Campaign {
   impressions: number;
   clicks: number;
   conversions: number;
+  revenue: number;
+  aov: number;
+  cpa: number;
+  purchase_count: number;
+  // Cafe24 자사몰 퍼널 이벤트 (Meta Pixel 추적)
+  landing_page_views: number;
+  content_views: number;
+  add_to_cart_count: number;
+  initiate_checkout_count: number;
   ai_verdict: string | null;
   ai_recommendation: string | null;
   ai_fix_type: string | null;
@@ -84,6 +93,560 @@ export const analyzeAll = () =>
   api.post<{ campaigns: AnalysisResult[] }>("/analysis/analyze-all").then((r) => r.data);
 export const analyzeSingle = (id: number) =>
   api.post<AnalysisResult>(`/analysis/analyze/${id}`).then((r) => r.data);
+
+// 규칙 기반 자동 판단 + 복합 퍼널 진단 (AI 비용 없음, 즉시 실행)
+
+export interface FunnelRates {
+  click_to_landing: number;
+  landing_to_view: number;
+  view_to_cart: number;
+  cart_to_checkout: number;
+  checkout_to_purchase: number;
+  click_to_purchase: number;
+  click_to_cart: number;
+}
+
+export interface FunnelDiagnosis {
+  stage: string;
+  diagnosis: string;
+  severity: "critical" | "warning" | "info" | "good";
+  evidence: string;
+  actions: string[];
+  funnel_rates: FunnelRates;
+}
+
+export interface BenchmarkComparison {
+  value: number;
+  avg: number;
+  median: number;
+  p75: number;
+  position: string;
+  vs_avg_pct: number;
+}
+
+export interface SmartRecommendation {
+  type: "learned" | "info";
+  action_type?: string;
+  diagnosis_stage?: string;
+  message: string;
+  expected_impact?: {
+    roas: string;
+    ctr: string;
+  };
+  confidence?: "high" | "medium" | "low";
+  relevance_score?: number;
+}
+
+export interface CampaignJudgment {
+  campaign_id: string | number;
+  campaign_name: string;
+  verdict: "SCALE" | "MAINTAIN" | "MODIFY" | "PAUSE";
+  severity: "excellent" | "good" | "warning" | "urgent" | "critical";
+  score: number;
+  reasons: string[];
+  recommendations: string[];
+  funnel_diagnosis: FunnelDiagnosis[];
+  metrics: {
+    roas: number; ctr: number; cpc: number; frequency: number;
+    spend: number; revenue: number; purchases: number; cpa: number; aov: number;
+  };
+  funnel: {
+    clicks: number;
+    landing_page_views: number;
+    content_views: number;
+    add_to_cart: number;
+    initiate_checkout: number;
+    purchases: number;
+  };
+  // 동적 벤치마크 대비 위치 (데이터 축적 후 활성화)
+  benchmark_comparison?: Record<string, BenchmarkComparison>;
+  // 학습 기반 스마트 추천 (과거 조치 효과 데이터에서 도출)
+  smart_recommendations?: SmartRecommendation[];
+}
+
+export interface FunnelSummary {
+  clicks: number;
+  landing_page_views: number;
+  content_views: number;
+  add_to_cart: number;
+  initiate_checkout: number;
+  purchases: number;
+  rates: FunnelRates;
+}
+
+export interface BenchmarkMetricSummary {
+  avg: number;
+  median: number;
+  p75: number;
+  p90: number;
+  sample_count: number;
+  suffix: string;
+}
+
+export interface JudgeSummary {
+  total_campaigns: number;
+  total_spend: number;
+  total_revenue: number;
+  total_purchases: number;
+  overall_roas: number;
+  profit_loss: number;
+  is_profitable: boolean;
+  avg_cpa: number;
+  avg_aov: number;
+  verdict_distribution: { SCALE: number; MAINTAIN: number; MODIFY: number; PAUSE: number };
+  overall_funnel: FunnelSummary;
+  top_bottlenecks: { stage: string; campaigns_affected: number }[];
+  // 동적 벤치마크 정보
+  has_benchmarks: boolean;
+  benchmark_period: string | null;
+  benchmark_summary: Record<string, BenchmarkMetricSummary | null> | null;
+}
+
+export interface JudgeResult {
+  judgments: CampaignJudgment[];
+  summary: JudgeSummary;
+}
+
+export const judgeAllCampaigns = () =>
+  api.post<JudgeResult>("/analysis/judge-all").then((r) => r.data);
+
+// Phase 4: 성과 트렌드 + 개선 추적
+export interface CampaignSnapshot {
+  id: number;
+  campaign_id: number;
+  snapshot_date: string;
+  roas: number;
+  ctr: number;
+  cpc: number;
+  frequency: number;
+  spend: number;
+  revenue: number;
+  purchases: number;
+  cpa: number;
+  aov: number;
+}
+
+export interface CampaignTrend {
+  snapshots: CampaignSnapshot[];
+  trend: "improving" | "stable" | "declining" | "insufficient_data";
+  change_7d: { roas: number; ctr: number; cpc: number; cpa: number; spend: number; revenue: number } | null;
+  change_30d: { roas: number; ctr: number; cpc: number; cpa: number; spend: number; revenue: number } | null;
+}
+
+export interface ImprovementEntry {
+  id: number;
+  campaign_id: number;
+  action_type: string;
+  action_description: string;
+  before_roas: number | null;
+  after_roas: number | null;
+  before_ctr: number | null;
+  after_ctr: number | null;
+  result_verdict: "improved" | "unchanged" | "worsened" | null;
+  measured_at: string | null;
+  created_at: string;
+}
+
+export interface ImprovementHistory {
+  improvements: ImprovementEntry[];
+  success_rate: string;
+  best_action: string | null;
+  action_breakdown: Record<string, { success: number; total: number }>;
+}
+
+export const fetchCampaignTrend = (campaignId: number) =>
+  api.get<CampaignTrend>(`/analysis/trends/${campaignId}`).then((r) => r.data);
+export const logCampaignImprovement = (campaignId: number, action_type: string, description: string) =>
+  api.post(`/analysis/improvements/${campaignId}`, { action_type, description }).then((r) => r.data);
+export const fetchImprovementHistory = (campaignId: number) =>
+  api.get<ImprovementHistory>(`/analysis/improvements/${campaignId}`).then((r) => r.data);
+export const takeSnapshot = () =>
+  api.post("/analysis/snapshot").then((r) => r.data);
+
+// ─── 트렌드 인텔리전스 (동적 벤치마크 + 메트릭 트렌드 + 학습 데이터) ───
+
+export interface MetricBenchmark {
+  avg: number;
+  median: number;
+  p25: number;
+  p75: number;
+  p90: number;
+  min: number;
+  max: number;
+  std_dev: number;
+  sample_count: number;
+  computed_at: string;
+}
+
+export interface BenchmarkData {
+  period: string;
+  metrics: Record<string, MetricBenchmark>;
+}
+
+export interface MetricTrend {
+  direction: "improving" | "stable" | "declining" | "insufficient_data";
+  current: number;
+  change_7d: number;
+  change_14d: number;
+  change_30d: number;
+  ma_7d: number;
+  ma_14d: number;
+  ma_30d: number;
+  volatility: number;
+  percentile_rank: number;
+  computed_at: string;
+}
+
+export interface CampaignMetricTrends {
+  campaign_id: number;
+  ad_metrics: Record<string, MetricTrend>;
+  funnel_metrics: Record<string, MetricTrend>;
+}
+
+export interface MetricHealthEntry {
+  current_value: number;
+  benchmark_avg: number;
+  benchmark_median?: number;
+  vs_avg: number;
+  position: string;
+  trend_direction: string;
+  trend_7d_change: number;
+  volatility?: number;
+}
+
+export interface DataMaturity {
+  level: "초기" | "발전" | "성장" | "성숙";
+  description: string;
+  snapshots: number;
+  unique_days: number;
+  measured_improvements: number;
+  recommendation: string;
+}
+
+export interface CampaignHealthReport {
+  campaign_id: number;
+  campaign_name: string;
+  ad_metrics: Record<string, MetricHealthEntry>;
+  funnel_metrics: Record<string, MetricHealthEntry>;
+  learned_recommendations: string[];
+  data_maturity: DataMaturity;
+}
+
+export interface ActionEffectivenessEntry {
+  action_type: string;
+  diagnosis_stage: string;
+  times_applied: number;
+  success_rate: string;
+  avg_roas_impact: string;
+  avg_ctr_impact: string;
+  breakdown: {
+    improved: number;
+    unchanged: number;
+    worsened: number;
+  };
+}
+
+export interface RecomputeResult {
+  success: boolean;
+  computed: { benchmarks: number; trends: number; effectiveness: number };
+  message: string;
+}
+
+export const fetchBenchmarks = (period: string = "30d") =>
+  api.get<BenchmarkData>(`/analysis/benchmarks?period=${period}`).then((r) => r.data);
+export const fetchMetricTrends = (campaignId: number) =>
+  api.get<CampaignMetricTrends>(`/analysis/metric-trends/${campaignId}`).then((r) => r.data);
+export const fetchHealthReport = (campaignId: number) =>
+  api.get<CampaignHealthReport>(`/analysis/health-report/${campaignId}`).then((r) => r.data);
+export const fetchSmartRecommendations = (campaignId: number) =>
+  api.get<{ campaign_id: number; recommendations: SmartRecommendation[] }>(`/analysis/smart-recommendations/${campaignId}`).then((r) => r.data);
+export const fetchActionEffectiveness = () =>
+  api.get<{ actions: ActionEffectivenessEntry[]; total: number }>("/analysis/action-effectiveness").then((r) => r.data);
+export const recomputeIntelligence = () =>
+  api.post<RecomputeResult>("/analysis/recompute-intelligence").then((r) => r.data);
+
+// ─── 크로스 검증 (Meta Pixel vs Cafe24 Admin API) ───
+
+export interface CrossValidationDiscrepancy {
+  type: string;
+  severity: "critical" | "warning" | "info";
+  title: string;
+  detail: string;
+  action: string;
+}
+
+export interface CrossValidationCorrectedMetrics {
+  corrected_roas: number;
+  roas_source: "meta_pixel" | "cafe24_actual";
+  meta_roas: number;
+  cafe24_roas: number | null;
+  corrected_cpa: number;
+  cpa_source: "meta_pixel" | "cafe24_actual";
+  corrected_aov: number;
+  aov_source: "meta_pixel" | "cafe24_actual";
+  total_spend: number;
+  best_revenue: number;
+  best_purchases: number;
+  confidence: "high" | "low";
+  note: string;
+}
+
+export interface CrossValidationQuality {
+  score: number;
+  grade: "A" | "B" | "C" | "D" | "F";
+  deductions: { reason: string; points: number }[];
+  summary: string;
+}
+
+export interface CrossValidationRecommendation {
+  priority: "critical" | "warning" | "info";
+  title: string;
+  action: string;
+  expected_impact: string;
+}
+
+export interface UtmMatchedCampaign {
+  campaign_name: string;
+  meta_campaign_id: string | null;
+  meta_spend: number;
+  meta_revenue: number;
+  meta_purchases: number;
+  meta_roas: number;
+  cafe24_orders: number;
+  cafe24_revenue: number;
+  cafe24_roas: number;
+  revenue_gap: number;
+  revenue_gap_pct: number;
+  purchase_gap: number;
+}
+
+export interface UtmUnmatchedMeta {
+  campaign_name: string;
+  meta_spend: number;
+  meta_revenue: number;
+  meta_purchases: number;
+  reason: string;
+}
+
+export interface CrossValidationResult {
+  period: { start: string; end: string };
+  meta_pixel: {
+    total_campaigns: number;
+    total_spend: number;
+    total_revenue: number;
+    total_purchases: number;
+    overall_roas: number;
+    total_clicks: number;
+    avg_cpa: number;
+    avg_aov: number;
+    funnel: {
+      landing_page_views: number;
+      content_views: number;
+      add_to_cart: number;
+      initiate_checkout: number;
+      purchases: number;
+    };
+    funnel_empty: boolean;
+  };
+  cafe24_actual: {
+    total_orders: number;
+    total_revenue: number;
+    meta_attributed_orders: number;
+    meta_attributed_revenue: number;
+    non_meta_orders: number;
+    no_utm_orders: number;
+    no_utm_rate: number;
+    by_campaign: Record<string, { orders: number; revenue: number }>;
+    avg_order_value: number;
+  };
+  utm_matching: {
+    matched: UtmMatchedCampaign[];
+    unmatched_meta: UtmUnmatchedMeta[];
+    unmatched_cafe24: { utm_campaign: string; orders: number; revenue: number; reason: string }[];
+    match_rate: number;
+    total_matched: number;
+    total_meta: number;
+  };
+  discrepancies: CrossValidationDiscrepancy[];
+  corrected_metrics: CrossValidationCorrectedMetrics;
+  quality_score: CrossValidationQuality;
+  recommendations: CrossValidationRecommendation[];
+  validated_at: string;
+}
+
+export interface SyncAndValidateResult {
+  sync: {
+    synced: number;
+    meta_attributed: number;
+    total_revenue: number;
+  } | { skipped: true; reason: string };
+  validation: CrossValidationResult | null;
+  message: string;
+}
+
+export const fetchCrossValidation = (startDate?: string, endDate?: string) => {
+  const params = new URLSearchParams();
+  if (startDate) params.set("start_date", startDate);
+  if (endDate) params.set("end_date", endDate);
+  return api.get<CrossValidationResult>(`/analysis/cross-validate?${params}`).then((r) => r.data);
+};
+
+export const syncAndValidate = () =>
+  api.post<SyncAndValidateResult>("/analysis/sync-and-validate").then((r) => r.data);
+
+// ─── UTM 관리 ───
+
+export interface UtmAdDetail {
+  ad_id: string;
+  ad_name: string;
+  url_tags: string;
+  status: "configured" | "missing";
+}
+
+export interface UtmCampaignStatus {
+  campaign_id: string;
+  campaign_name: string;
+  campaign_status: string;
+  total_ads: number;
+  utm_configured: boolean;
+  ads_with_utm: number;
+  ads_without_utm: number;
+  ads: UtmAdDetail[];
+}
+
+export interface UtmDiagnosisResult {
+  summary: {
+    total_campaigns: number;
+    with_utm: number;
+    without_utm: number;
+    coverage_pct: number;
+  };
+  campaigns: UtmCampaignStatus[];
+  recommended_utm_template: string;
+}
+
+export interface UtmApplyResult {
+  updated: number;
+  failed: number;
+  skipped: number;
+  details: {
+    updated: { ad_id: string; ad_name: string; url_tags: string }[];
+    failed: { ad_id: string; ad_name: string; error: string }[];
+    skipped: { ad_id: string; ad_name: string; reason: string }[];
+  };
+}
+
+export const fetchUtmStatus = () =>
+  api.get<UtmDiagnosisResult>("/meta/utm/status").then((r) => r.data);
+export const applyUtmToAllCampaigns = (campaignIds?: string[]) =>
+  api.post<UtmApplyResult>("/meta/utm/apply", { campaign_ids: campaignIds || [] }).then((r) => r.data);
+
+// ─── Pixel 진단 ───
+
+export interface PixelInfo {
+  pixel_count: number;
+  pixels: {
+    id: string;
+    name: string;
+    creation_time: string;
+    last_fired_time: string | null;
+    is_active: boolean;
+  }[];
+}
+
+export interface PixelEventStatus {
+  purchase: "active" | "inactive";
+  view_content: "active" | "inactive";
+  add_to_cart: "active" | "inactive";
+  initiate_checkout: "active" | "inactive";
+  landing_page_view: "active" | "inactive";
+}
+
+export interface Cafe24PixelGuideStep {
+  step: number;
+  title: string;
+  description: string;
+  url?: string;
+  path?: string;
+  pixel_id?: string;
+  events?: { event: string; page: string; description: string }[];
+  important?: boolean;
+  tool_url?: string;
+}
+
+export interface Cafe24PixelGuide {
+  overview: string;
+  steps: Cafe24PixelGuideStep[];
+  alternative_method: {
+    title: string;
+    description: string;
+    base_code: string;
+    event_codes: Record<string, string>;
+  };
+}
+
+export interface PixelDiagnosticsResult {
+  pixel_info: PixelInfo | { error: string } | null;
+  event_status: PixelEventStatus | null;
+  funnel_check: {
+    campaigns_checked: number;
+    total_clicks: number;
+    total_purchases: number;
+    funnel_events: Record<string, number>;
+    funnel_empty: boolean;
+    has_purchases_but_no_funnel: boolean;
+  } | null;
+  cafe24_guide: Cafe24PixelGuide | null;
+  overall_status: "healthy" | "warning" | "critical" | "disconnected" | "no_account" | "unknown";
+  issues: { severity: "critical" | "warning"; message: string }[];
+  actions: string[];
+}
+
+export const fetchPixelDiagnostics = () =>
+  api.get<PixelDiagnosticsResult>("/meta/pixel/diagnostics").then((r) => r.data);
+
+// ─── 데이터 파이프라인 통합 체크 ───
+
+export interface PipelineChecklistItem {
+  id: string;
+  title: string;
+  status: "done" | "todo" | "partial" | "unknown";
+  priority: number;
+  action: string | null;
+  details?: Record<string, unknown> | null;
+}
+
+export interface PipelineCheckResult {
+  progress: {
+    completed: number;
+    total: number;
+    percentage: number;
+  };
+  checklist: PipelineChecklistItem[];
+  next_action: {
+    title: string;
+    action: string | null;
+    priority: number;
+  } | null;
+  connections: {
+    meta: boolean;
+    cafe24: boolean;
+  };
+  pixel: Record<string, unknown>;
+  utm: Record<string, unknown>;
+  validation: {
+    quality_score: number;
+    grade: string;
+    discrepancy_count?: number;
+    critical_issues?: number;
+    corrected_roas?: number;
+    confidence?: string;
+  };
+  checked_at: string;
+}
+
+export const fetchPipelineCheck = () =>
+  api.get<PipelineCheckResult>("/meta/pipeline/check").then((r) => r.data);
 
 // Competitors
 export const fetchCompetitors = () => api.get<Competitor[]>("/competitors").then((r) => r.data);
@@ -400,6 +963,9 @@ export interface AdCopyGeneration {
     reviews_used: { total_count: number; themes: number; strengths: number };
     ad_library_used: { searches: number; patterns: number; trends: number };
   };
+  has_media?: boolean;
+  media_type?: "image" | "video" | null;
+  has_video_analysis?: boolean;
 }
 
 export interface AdCopyHistorySummary {
@@ -456,7 +1022,7 @@ export const generateAdCopyWithMedia = (data: {
 
   return api.post<AdCopyGeneration>("/ad-copy/generate-with-media", formData, {
     headers: { "Content-Type": "multipart/form-data" },
-    timeout: 120000,
+    timeout: 180000, // 3분 (Gemini 영상 분석 포함)
   }).then((r) => r.data);
 };
 
@@ -482,3 +1048,140 @@ export const submitAdCopyPerformance = (id: number, data: {
   clicks?: number;
   notes?: string;
 }) => api.put(`/ad-copy/${id}/performance`, data).then((r) => r.data);
+
+// ─── Cafe24 연동 ───
+
+export interface Cafe24Config {
+  configured: boolean;
+  mall_id: string | null;
+  client_id_set: boolean;
+  redirect_uri: string;
+}
+
+export interface Cafe24Status {
+  connected: boolean;
+  mall_id?: string;
+  token_expires_at?: string;
+  token_valid?: boolean;
+  refresh_valid?: boolean;
+  refresh_expires_at?: string;
+  scopes?: string;
+  updated_at?: string;
+}
+
+export interface Cafe24Order {
+  order_id: string;
+  order_date: string;
+  total_amount: number;
+  item_count: number;
+  product_names: string;
+  payment_method: string | null;
+  utm_source: string | null;
+  utm_campaign: string | null;
+}
+
+export interface Cafe24SalesSummary {
+  period: { start: string; end: string };
+  total_orders: number;
+  total_revenue: number;
+  total_items: number;
+  avg_order_value: number;
+  payment_methods: Record<string, number>;
+  utm_sources: Record<string, number>;
+  daily_revenue: Record<string, { revenue: number; orders: number }>;
+}
+
+export interface Cafe24SyncResult {
+  synced: number;
+  period: { start: string; end: string };
+  meta_attributed: number;
+}
+
+export interface Cafe24MetaOrders {
+  total_meta_orders: number;
+  total_meta_revenue: number;
+  by_campaign: {
+    campaign_name: string;
+    orders: number;
+    revenue: number;
+    items: number;
+    avg_order_value: number;
+  }[];
+  all_orders: number;
+  meta_attribution_rate: string;
+}
+
+export const fetchCafe24Config = () =>
+  api.get<Cafe24Config>("/cafe24/config").then((r) => r.data);
+export const saveCafe24Config = (mall_id: string, client_id: string, client_secret: string) =>
+  api.post("/cafe24/config", { mall_id, client_id, client_secret }).then((r) => r.data);
+export const fetchCafe24AuthUrl = () =>
+  api.get<{ url: string }>("/cafe24/auth-url").then((r) => r.data);
+export const fetchCafe24Status = () =>
+  api.get<Cafe24Status>("/cafe24/status").then((r) => r.data);
+export const disconnectCafe24 = () =>
+  api.post("/cafe24/disconnect").then((r) => r.data);
+export const fetchCafe24Orders = (startDate?: string, endDate?: string) => {
+  const params = new URLSearchParams();
+  if (startDate) params.set("start_date", startDate);
+  if (endDate) params.set("end_date", endDate);
+  return api.get<{ orders: Cafe24Order[]; count: number }>(`/cafe24/orders?${params}`).then((r) => r.data);
+};
+export const fetchCafe24SalesSummary = (startDate?: string, endDate?: string) => {
+  const params = new URLSearchParams();
+  if (startDate) params.set("start_date", startDate);
+  if (endDate) params.set("end_date", endDate);
+  return api.get<Cafe24SalesSummary>(`/cafe24/sales-summary?${params}`).then((r) => r.data);
+};
+export const syncCafe24Orders = () =>
+  api.post<Cafe24SyncResult>("/cafe24/sync").then((r) => r.data);
+export const fetchCafe24MetaOrders = (startDate?: string, endDate?: string) => {
+  const params = new URLSearchParams();
+  if (startDate) params.set("start_date", startDate);
+  if (endDate) params.set("end_date", endDate);
+  return api.get<Cafe24MetaOrders>(`/cafe24/meta-orders?${params}`).then((r) => r.data);
+};
+
+// ─── Campaign Publish (Meta 캠페인 자동생성) ───
+
+export interface FacebookPage {
+  id: string;
+  name: string;
+  access_token: string;
+  category: string;
+}
+
+export interface CampaignPublishRequest {
+  ad_copy_generation_id: number;
+  copy_index: number;
+  campaign_name: string;
+  objective: string;
+  daily_budget: number;
+  targeting: {
+    geo_locations: { countries: string[] };
+    age_min: number;
+    age_max: number;
+  };
+  optimization_goal: string;
+  start_time: string;
+  page_id: string;
+  link_url: string;
+  cta_type: string;
+}
+
+export interface PublishResult {
+  success: boolean;
+  meta_campaign_id?: string;
+  meta_adset_id?: string;
+  meta_creative_id?: string;
+  meta_ad_id?: string;
+  published_campaign_id?: number;
+  error?: string;
+  partial_results?: Record<string, string>;
+}
+
+export const fetchFacebookPages = () =>
+  api.get<FacebookPage[]>("/campaign-publish/pages").then((r) => r.data);
+
+export const publishCampaignToMeta = (data: CampaignPublishRequest) =>
+  api.post<PublishResult>("/campaign-publish/publish", data, { timeout: 300000 }).then((r) => r.data); // 5분 (비디오 청크 업로드 포함)

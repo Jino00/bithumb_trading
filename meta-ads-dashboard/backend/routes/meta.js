@@ -1,4 +1,4 @@
-// Meta Ads OAuth 연동 + 캠페인 동기화 라우트
+// Meta Ads OAuth 연동 + 캠페인 동기화 + UTM 관리 + Pixel 진단 라우트
 import { Router } from "express";
 import { getDb } from "../db/database.js";
 import {
@@ -16,6 +16,9 @@ import {
   mapAccountInsightToSchema,
   delay,
 } from "../services/meta-api.js";
+import { diagnoseUtmStatus, applyUtmToCampaigns } from "../services/utm-manager.js";
+import { diagnosePixel } from "../services/pixel-diagnostics.js";
+import { checkPipeline } from "../services/pipeline-checker.js";
 
 const router = Router();
 const FRONTEND_URL = "http://localhost:5173";
@@ -223,20 +226,29 @@ router.post("/sync", async (_req, res) => {
           db.prepare(`
             UPDATE campaigns SET name=?, status=?, ctr=?, roas=?, cpc=?, frequency=?,
               daily_spend=?, total_spend=?, impressions=?, clicks=?, conversions=?,
+              revenue=?, aov=?, cpa=?, purchase_count=?,
+              landing_page_views=?, content_views=?, add_to_cart_count=?, initiate_checkout_count=?,
               source='meta', updated_at=datetime('now')
             WHERE meta_campaign_id=?
           `).run(
             mapped.name, mapped.status, mapped.ctr, mapped.roas, mapped.cpc, mapped.frequency,
             mapped.daily_spend, mapped.total_spend, mapped.impressions, mapped.clicks, mapped.conversions,
+            mapped.revenue, mapped.aov, mapped.cpa, mapped.purchase_count,
+            mapped.landing_page_views, mapped.content_views, mapped.add_to_cart_count, mapped.initiate_checkout_count,
             mapped.meta_campaign_id
           );
         } else {
           db.prepare(`
-            INSERT INTO campaigns (name, status, ctr, roas, cpc, frequency, daily_spend, total_spend, impressions, clicks, conversions, meta_campaign_id, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'meta')
+            INSERT INTO campaigns (name, status, ctr, roas, cpc, frequency, daily_spend, total_spend,
+              impressions, clicks, conversions, revenue, aov, cpa, purchase_count,
+              landing_page_views, content_views, add_to_cart_count, initiate_checkout_count,
+              meta_campaign_id, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'meta')
           `).run(
             mapped.name, mapped.status, mapped.ctr, mapped.roas, mapped.cpc, mapped.frequency,
             mapped.daily_spend, mapped.total_spend, mapped.impressions, mapped.clicks, mapped.conversions,
+            mapped.revenue, mapped.aov, mapped.cpa, mapped.purchase_count,
+            mapped.landing_page_views, mapped.content_views, mapped.add_to_cart_count, mapped.initiate_checkout_count,
             mapped.meta_campaign_id
           );
         }
@@ -335,6 +347,55 @@ router.get("/insights", async (req, res) => {
     // 기본 계정일 때만 수동 캠페인 포함
     const manualCampaigns = db.prepare("SELECT * FROM campaigns WHERE source = 'manual' OR source IS NULL").all();
     res.json([...manualCampaigns, ...metaCampaigns]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── UTM 관리 ───
+
+/** UTM 설정 상태 진단 — 모든 캠페인의 UTM 파라미터 확인 */
+router.get("/utm/status", async (_req, res) => {
+  try {
+    const result = await diagnoseUtmStatus();
+    if (result.error) return res.status(400).json({ error: result.error });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** UTM 자동 적용 — 누락된 캠페인에 UTM 파라미터 추가 */
+router.post("/utm/apply", async (req, res) => {
+  try {
+    const { campaign_ids } = req.body;
+    const result = await applyUtmToCampaigns(campaign_ids || []);
+    if (result.error) return res.status(400).json({ error: result.error });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Pixel 진단 ───
+
+/** Meta Pixel 종합 진단 + Cafe24 설치 가이드 */
+router.get("/pixel/diagnostics", async (_req, res) => {
+  try {
+    const result = await diagnosePixel();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── 데이터 파이프라인 통합 체크 ───
+
+/** 4가지 핵심 조치 상태를 한번에 진단 */
+router.get("/pipeline/check", async (_req, res) => {
+  try {
+    const result = await checkPipeline();
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

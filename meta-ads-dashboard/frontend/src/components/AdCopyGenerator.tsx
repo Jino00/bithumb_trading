@@ -18,6 +18,7 @@ import {
   ImagePlus,
   X,
   Film,
+  Send,
 } from "lucide-react";
 import {
   Product,
@@ -33,6 +34,7 @@ import {
   submitAdCopyFeedback,
   submitAdCopyPerformance,
 } from "../lib/api";
+import CampaignPublishModal from "./CampaignPublishModal";
 
 type CopyType = "full" | "headline" | "body" | "cta";
 type Platform = "facebook" | "instagram" | "both";
@@ -102,7 +104,8 @@ export default function AdCopyGeneratorPage() {
   const selectedProduct = products.find((p) => p.id === selectedProductId);
 
   const ACCEPTED_MEDIA_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif", "video/mp4", "video/quicktime"];
-  const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
+  const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20MB
+  const MAX_VIDEO_SIZE = 500 * 1024 * 1024; // 500MB
 
   const handleMediaSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -112,8 +115,10 @@ export default function AdCopyGeneratorPage() {
       setError("지원하지 않는 파일 형식입니다. JPG, PNG, WebP, GIF, MP4, MOV만 가능합니다.");
       return;
     }
-    if (file.size > MAX_FILE_SIZE) {
-      setError("파일 크기가 20MB를 초과합니다.");
+    const maxSize = file.type.startsWith("video/") ? MAX_VIDEO_SIZE : MAX_IMAGE_SIZE;
+    const maxMB = maxSize / (1024 * 1024);
+    if (file.size > maxSize) {
+      setError(`파일 크기가 ${maxMB}MB를 초과합니다.`);
       return;
     }
 
@@ -317,7 +322,7 @@ export default function AdCopyGeneratorPage() {
                   <div className="border-2 border-dashed border-gray-200 rounded-lg p-4 text-center hover:border-indigo-300 hover:bg-indigo-50/30 transition-colors">
                     <ImagePlus className="w-6 h-6 mx-auto text-gray-300" />
                     <p className="text-xs text-gray-400 mt-1.5">클릭하여 업로드</p>
-                    <p className="text-[10px] text-gray-300 mt-0.5">JPG, PNG, WebP, GIF, MP4, MOV (최대 20MB)</p>
+                    <p className="text-[10px] text-gray-300 mt-0.5">이미지: JPG, PNG, WebP, GIF (20MB) | 영상: MP4, MOV (500MB)</p>
                   </div>
                   <input
                     type="file"
@@ -408,6 +413,12 @@ export default function AdCopyGeneratorPage() {
                   <span className="font-medium">{result.context_summary.ad_library_used.patterns}개</span>
                 </div>
               </div>
+              {result?.has_video_analysis && (
+                <div className="flex items-center gap-1.5 mt-3 p-2 bg-purple-50 rounded-lg border border-purple-100">
+                  <Film className="w-3.5 h-3.5 text-purple-500" />
+                  <span className="text-xs text-purple-600 font-medium">Gemini 영상 분석 반영됨</span>
+                </div>
+              )}
             </div>
           )}
 
@@ -469,11 +480,23 @@ export default function AdCopyGeneratorPage() {
             <div className="bg-white rounded-xl border border-gray-200 p-10 text-center">
               <Loader2 className="w-8 h-8 animate-spin mx-auto text-indigo-400" />
               <p className="mt-2 text-sm text-gray-500">
-                AI가 리뷰 데이터와 광고 트렌드{mediaFile ? ", 첨부된 미디어" : ""}를 분석하여 카피를 생성하고 있습니다...
+                {mediaFile?.type.startsWith("video/")
+                  ? "Gemini가 영상을 분석하고, Claude가 카피를 생성하고 있습니다..."
+                  : `AI가 리뷰 데이터와 광고 트렌드${mediaFile ? ", 첨부된 미디어" : ""}를 분석하여 카피를 생성하고 있습니다...`}
               </p>
               <p className="text-xs text-gray-400 mt-1">
-                {mediaFile ? "미디어 분석 포함 — 최대 60초 소요될 수 있습니다" : "최대 30초 소요될 수 있습니다"}
+                {mediaFile?.type.startsWith("video/")
+                  ? "영상 업로드 + AI 분석 포함 — 최대 2~3분 소요될 수 있습니다"
+                  : mediaFile
+                    ? "미디어 분석 포함 — 최대 60초 소요될 수 있습니다"
+                    : "최대 30초 소요될 수 있습니다"}
               </p>
+              {mediaFile?.type.startsWith("video/") && (
+                <div className="mt-3 flex items-center justify-center gap-2 text-xs text-purple-500">
+                  <div className="w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
+                  Gemini AI 영상 분석 진행 중...
+                </div>
+              )}
             </div>
           ) : loadingHistory ? (
             <div className="bg-white rounded-xl border border-gray-200 p-10 text-center">
@@ -483,7 +506,7 @@ export default function AdCopyGeneratorPage() {
           ) : displayCopies.length > 0 ? (
             <div className="space-y-4">
               {displayCopies.map((copy, i) => (
-                <CopyCard key={i} copy={copy} index={i} generationId={displayId} />
+                <CopyCard key={i} copy={copy} index={i} generationId={displayId} mediaType={mediaFile?.type.startsWith("video/") ? "video" : mediaFile ? "image" : undefined} />
               ))}
             </div>
           ) : (
@@ -506,7 +529,7 @@ export default function AdCopyGeneratorPage() {
   );
 }
 
-function CopyCard({ copy, index, generationId }: { copy: AdCopy; index: number; generationId: number | null }) {
+function CopyCard({ copy, index, generationId, mediaType }: { copy: AdCopy; index: number; generationId: number | null; mediaType?: "image" | "video" }) {
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [showRationale, setShowRationale] = useState(false);
   const [rating, setRating] = useState<number>(0);
@@ -514,6 +537,7 @@ function CopyCard({ copy, index, generationId }: { copy: AdCopy; index: number; 
   const [showPerformance, setShowPerformance] = useState(false);
   const [perfForm, setPerfForm] = useState({ ctr: "", roas: "", conversions: "" });
   const [perfSubmitted, setPerfSubmitted] = useState(false);
+  const [showPublishModal, setShowPublishModal] = useState(false);
 
   const handleCopy = (text: string, field: string) => {
     navigator.clipboard.writeText(text);
@@ -603,6 +627,15 @@ function CopyCard({ copy, index, generationId }: { copy: AdCopy; index: number; 
           >
             {copiedField === "all" ? <CheckCircle className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
             전체 복사
+          </button>
+
+          {/* Publish to Meta */}
+          <button
+            onClick={() => setShowPublishModal(true)}
+            className="flex items-center gap-1 px-2 py-1 text-xs text-blue-600 hover:bg-blue-50 rounded transition-colors"
+            title="Meta 캠페인으로 퍼블리시"
+          >
+            <Send className="w-3 h-3" /> Meta 퍼블리시
           </button>
         </div>
       </div>
@@ -703,6 +736,19 @@ function CopyCard({ copy, index, generationId }: { copy: AdCopy; index: number; 
           </div>
         )}
       </div>
+
+      {/* Campaign Publish Modal */}
+      {showPublishModal && generationId && (
+        <CampaignPublishModal
+          copy={copy}
+          copyIndex={index}
+          generationId={generationId}
+          hasMedia={!!mediaType}
+          mediaType={mediaType}
+          onClose={() => setShowPublishModal(false)}
+          onPublished={() => setShowPublishModal(false)}
+        />
+      )}
     </div>
   );
 }

@@ -10,13 +10,16 @@ interface Props {
   loading: boolean;
 }
 
-type SortKey = "name" | "ctr" | "roas" | "cpc" | "frequency" | "total_spend" | "ai_verdict";
+type SortKey = "name" | "ctr" | "roas" | "cpc" | "frequency" | "total_spend" | "revenue" | "purchase_count" | "cpa" | "ai_verdict";
 
 function KpiBadge({ metric, value }: { metric: string; value: number }) {
   const status = getKpiStatus(metric, value);
   const colorClass = getStatusColor(status);
-  const display = metric === "cpc" ? formatCurrency(value) : metric === "ctr" ? formatPercent(value) : `${value.toFixed(1)}x`;
-  if (metric === "frequency") return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${colorClass}`}>{value.toFixed(1)}</span>;
+  let display: string;
+  if (metric === "cpc" || metric === "cpa") display = formatCurrency(value);
+  else if (metric === "ctr") display = formatPercent(value);
+  else if (metric === "frequency") display = value.toFixed(1);
+  else display = `${value.toFixed(2)}x`;
   return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${colorClass}`}>{display}</span>;
 }
 
@@ -89,7 +92,10 @@ export default function AdPerformanceTable({ campaigns, onEdit, loading }: Props
               <SortHeader label="ROAS" keyName="roas" />
               <SortHeader label="CPC" keyName="cpc" />
               <SortHeader label="Freq" keyName="frequency" />
-              <SortHeader label="Spend" keyName="total_spend" />
+              <SortHeader label="광고비" keyName="total_spend" />
+              <SortHeader label="매출" keyName="revenue" />
+              <SortHeader label="구매" keyName="purchase_count" />
+              <SortHeader label="CPA" keyName="cpa" />
               <SortHeader label="AI Verdict" keyName="ai_verdict" />
               <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
             </tr>
@@ -112,6 +118,9 @@ export default function AdPerformanceTable({ campaigns, onEdit, loading }: Props
                 <td className="px-4 py-3"><KpiBadge metric="cpc" value={c.cpc} /></td>
                 <td className="px-4 py-3"><KpiBadge metric="frequency" value={c.frequency} /></td>
                 <td className="px-4 py-3 text-sm text-gray-700">{formatCurrency(c.total_spend)}</td>
+                <td className="px-4 py-3 text-sm text-gray-700">{(c.revenue || 0) > 0 ? formatCurrency(c.revenue) : <span className="text-gray-400">-</span>}</td>
+                <td className="px-4 py-3 text-sm text-gray-700">{(c.purchase_count || 0) > 0 ? `${c.purchase_count}건` : <span className="text-gray-400">-</span>}</td>
+                <td className="px-4 py-3">{(c.cpa || 0) > 0 ? <KpiBadge metric="cpa" value={c.cpa} /> : <span className="text-xs text-gray-400">-</span>}</td>
                 <td className="px-4 py-3"><VerdictBadge verdict={c.ai_verdict} /></td>
                 <td className="px-4 py-3">
                   <button onClick={() => onEdit(c)} className="p-1 text-gray-400 hover:text-blue-600 transition-colors" title="Edit campaign">

@@ -1,5 +1,5 @@
 // 메인 대시보드 — KPI 요약 카드 + 차트 + 기간 필터
-import { DollarSign, MousePointerClick, Target, Eye, Loader2, Building2, ChevronDown } from "lucide-react";
+import { DollarSign, MousePointerClick, Target, Eye, Loader2, Building2, ChevronDown, TrendingUp, ShoppingCart } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import { Campaign, DatePeriod, MetaBusiness, MetaAdAccount } from "../lib/api";
 import { formatCurrency, formatNumber } from "../lib/utils";
@@ -53,11 +53,12 @@ const COLORS = ["#10B981", "#F59E0B", "#EF4444", "#6366F1", "#8B5CF6"];
 
 export default function DashboardSummary({ campaigns, dateRange, onDateRangeChange, loading, activeOnly, onActiveOnlyChange, businesses, selectedBusinessId, onBusinessChange, adAccounts, selectedAccountId, onAccountChange }: Props) {
   const totalSpend = campaigns.reduce((sum, c) => sum + c.total_spend, 0);
+  const totalRevenue = campaigns.reduce((sum, c) => sum + (c.revenue || 0), 0);
   const totalImpressions = campaigns.reduce((sum, c) => sum + c.impressions, 0);
   const totalClicks = campaigns.reduce((sum, c) => sum + c.clicks, 0);
-  const avgRoas = campaigns.length > 0
-    ? campaigns.reduce((sum, c) => sum + c.roas, 0) / campaigns.length
-    : 0;
+  const totalPurchases = campaigns.reduce((sum, c) => sum + (c.purchase_count || 0), 0);
+  const overallRoas = totalSpend > 0 ? totalRevenue / totalSpend : 0;
+  const avgCpa = totalPurchases > 0 ? totalSpend / totalPurchases : 0;
 
   const barData = campaigns.map((c) => ({
     name: c.name.length > 15 ? c.name.substring(0, 15) + "..." : c.name,
@@ -152,34 +153,48 @@ export default function DashboardSummary({ campaigns, dateRange, onDateRangeChan
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
         <KpiCard
           icon={DollarSign}
-          label="Total Spend"
+          label="총 광고비"
           value={formatCurrency(totalSpend)}
-          subtext={`${campaigns.length} campaigns`}
+          subtext={`${campaigns.length}개 캠페인`}
           color="bg-blue-500"
         />
         <KpiCard
-          icon={Eye}
-          label="Impressions"
-          value={formatNumber(totalImpressions)}
-          subtext="Total reach"
-          color="bg-purple-500"
-        />
-        <KpiCard
-          icon={MousePointerClick}
-          label="Total Clicks"
-          value={formatNumber(totalClicks)}
-          subtext={`${totalImpressions > 0 ? ((totalClicks / totalImpressions) * 100).toFixed(2) : 0}% avg CTR`}
-          color="bg-green-500"
+          icon={TrendingUp}
+          label="총 매출"
+          value={formatCurrency(totalRevenue)}
+          subtext={totalRevenue >= totalSpend ? `+${formatCurrency(totalRevenue - totalSpend)} 흑자` : `${formatCurrency(totalRevenue - totalSpend)} 적자`}
+          color={totalRevenue >= totalSpend ? "bg-green-500" : "bg-red-500"}
         />
         <KpiCard
           icon={Target}
-          label="Avg ROAS"
-          value={`${avgRoas.toFixed(1)}x`}
-          subtext={avgRoas >= 3 ? "On target" : "Below target"}
-          color={avgRoas >= 3 ? "bg-green-500" : "bg-yellow-500"}
+          label="전체 ROAS"
+          value={`${overallRoas.toFixed(2)}x`}
+          subtext={overallRoas >= 2 ? "양호" : overallRoas >= 1 ? "손익분기" : "적자"}
+          color={overallRoas >= 2 ? "bg-green-500" : overallRoas >= 1 ? "bg-yellow-500" : "bg-red-500"}
+        />
+        <KpiCard
+          icon={MousePointerClick}
+          label="클릭 / CTR"
+          value={formatNumber(totalClicks)}
+          subtext={`${totalImpressions > 0 ? ((totalClicks / totalImpressions) * 100).toFixed(2) : 0}% CTR`}
+          color="bg-indigo-500"
+        />
+        <KpiCard
+          icon={ShoppingCart}
+          label="구매 / CPA"
+          value={`${totalPurchases}건`}
+          subtext={totalPurchases > 0 ? `CPA ${formatCurrency(avgCpa)}` : "구매 없음"}
+          color="bg-purple-500"
+        />
+        <KpiCard
+          icon={Eye}
+          label="노출수"
+          value={formatNumber(totalImpressions)}
+          subtext="Total impressions"
+          color="bg-gray-500"
         />
       </div>
 

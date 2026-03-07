@@ -1,10 +1,11 @@
-// 데이터 기반 광고 카피 생성 REST API — 리뷰 + Ad Library + 성과 학습 + 미디어 Vision
+// 데이터 기반 광고 카피 생성 REST API — 리뷰 + Ad Library + 성과 학습 + 미디어 Vision + Gemini 영상 분석
 import { Router } from "express";
 import fs from "fs";
 import { getDb } from "../db/database.js";
 import { generateAdCopy } from "../services/ad-copy-generator.js";
 import { uploadMedia, isVideoFile, UPLOAD_DIR } from "../middleware/upload.js";
 import { extractVideoThumbnail } from "../services/video-thumbnail.js";
+import { analyzeVideo, formatVideoAnalysisForPrompt } from "../services/video-analyzer.js";
 
 const router = Router();
 
@@ -98,46 +99,81 @@ router.post("/generate-with-media", (req, res, next) => {
     let mediaContext = null;
     let mediaFilename = null;
     let mediaType = null;
+    let videoAnalysisText = null;
+    let hasVideoAnalysis = false;
 
     if (req.file) {
       let imagePath = req.file.path;
 
       if (isVideoFile(req.file.mimetype)) {
         mediaType = "video";
-        console.log(`[Ad Copy] Extracting thumbnail from video: ${req.file.filename}`);
-        imagePath = await extractVideoThumbnail(req.file.path, UPLOAD_DIR);
+        console.log(`[Ad Copy] Video detected: ${req.file.filename}. Running thumbnail + Gemini analysis in parallel...`);
+
+        // 썸네일 추출 + Gemini 영상 분석 병렬 실행
+        const [thumbnailResult, geminiResult] = await Promise.allSettled([
+          extractVideoThumbnail(req.file.path, UPLOAD_DIR),
+          analyzeVideo(req.file.path),
+        ]);
+
+        // 썸네일 결과
+        if (thumbnailResult.status === "fulfilled") {
+          imagePath = thumbnailResult.value;
+        } else {
+          console.warn("[Ad Copy] Thumbnail extraction failed:", thumbnailResult.reason);
+        }
+
+        // Gemini 영상 분석 결과
+        if (geminiResult.status === "fulfilled" && geminiResult.value.data) {
+          videoAnalysisText = formatVideoAnalysisForPrompt(geminiResult.value.data);
+          hasVideoAnalysis = true;
+          console.log(`[Ad Copy] Gemini video analysis complete. Report length: ${videoAnalysisText.length} chars`);
+        } else {
+          const errMsg = geminiResult.status === "rejected"
+            ? geminiResult.reason?.message
+            : geminiResult.value?.error;
+          console.warn("[Ad Copy] Gemini video analysis failed (proceeding without):", errMsg);
+        }
       } else {
         mediaType = "image";
       }
 
-      const imageBuffer = fs.readFileSync(imagePath);
-      const base64 = imageBuffer.toString("base64");
-      const mimeType = mediaType === "video" ? "image/jpeg" : req.file.mimetype;
+      // 이미지/썸네일 → base64 인코딩
+      if (fs.existsSync(imagePath)) {
+        const imageBuffer = fs.readFileSync(imagePath);
+        const base64 = imageBuffer.toString("base64");
+        const mimeType = mediaType === "video" ? "image/jpeg" : req.file.mimetype;
 
-      mediaContext = {
-        base64,
-        mediaType: mimeType,
-        originalType: mediaType,
-        emphasis: media_emphasis || null,
-      };
+        mediaContext = {
+          base64,
+          mediaType: mimeType,
+          originalType: mediaType,
+          emphasis: media_emphasis || null,
+        };
+      }
       mediaFilename = req.file.filename;
 
-      console.log(`[Ad Copy] Media attached: ${mediaType} (${req.file.filename}), emphasis: "${media_emphasis || "없음"}"`);
+      console.log(`[Ad Copy] Media attached: ${mediaType} (${req.file.filename}), emphasis: "${media_emphasis || "없음"}", video_analysis: ${hasVideoAnalysis}`);
     }
 
     console.log(`[Ad Copy] Generating copy for product: ${product.name} (media: ${mediaType || "없음"})`);
 
-    const result = await generateAdCopy(product_id, { copy_type, platform, tone, custom_instruction }, mediaContext);
+    const result = await generateAdCopy(product_id, { copy_type, platform, tone, custom_instruction }, mediaContext, videoAnalysisText);
+
+    // 영상 분석 요약 저장 (최대 2000자)
+    const videoSummary = hasVideoAnalysis && videoAnalysisText
+      ? videoAnalysisText.substring(0, 2000)
+      : null;
 
     const insertResult = db.prepare(`
-      INSERT INTO ad_copy_generations (product_id, copy_type, platform, tone, generated_copies, review_context, ad_library_context, media_filename, media_type, media_emphasis)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO ad_copy_generations (product_id, copy_type, platform, tone, generated_copies, review_context, ad_library_context, media_filename, media_type, media_emphasis, video_analysis_summary, has_video_analysis)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       product_id, copy_type, platform, tone,
       JSON.stringify(result.copies),
       JSON.stringify(result.review_context),
       JSON.stringify(result.ad_library_context),
       mediaFilename, mediaType, media_emphasis || null,
+      videoSummary, hasVideoAnalysis ? 1 : 0,
     );
 
     console.log(`[Ad Copy] Generated ${result.copies.length} copies with media, saved as ID: ${insertResult.lastInsertRowid}`);
@@ -150,6 +186,7 @@ router.post("/generate-with-media", (req, res, next) => {
       context_summary: result.context_summary,
       has_media: !!mediaContext,
       media_type: mediaType,
+      has_video_analysis: hasVideoAnalysis,
     });
   } catch (err) {
     console.error("Failed to generate ad copy with media:", err);

@@ -12,6 +12,7 @@ const SYSTEM_PROMPT = `당신은 한국 시장 전문 Meta Ads 카피라이터�
 4. 데이터 근거(리뷰 수, 평점 등)를 활용하여 신뢰감 구축
 5. 플랫폼(Facebook/Instagram)에 맞는 톤과 길이 조절
 6. 이미지가 첨부된 경우: 시각적 요소(색상, 구도, 제품 외형, 분위기)를 분석하고 이를 카피에 자연스럽게 반영. 카피가 해당 이미지와 함께 광고에 사용된다는 전제로 작성
+7. 영상 분석 리포트가 제공된 경우: 장면 구성, 나레이션, 감정 흐름, 화면 텍스트 등을 카피에 깊이 반영. 단순 이미지 묘사가 아닌, 영상 전체의 서사와 메시지를 카피에 녹여야 함
 
 반드시 아래 JSON 형식으로만 응답하세요.`;
 
@@ -46,7 +47,7 @@ const PLATFORM_GUIDELINES = {
  * @param {object} options - { copy_type, platform, tone, custom_instruction }
  * @returns {object} { copies, context_summary, review_context, ad_library_context }
  */
-export async function generateAdCopy(productId, options = {}, mediaContext = null) {
+export async function generateAdCopy(productId, options = {}, mediaContext = null, videoAnalysis = null) {
   const { copy_type = "full", platform = "facebook", tone = "professional", custom_instruction = "" } = options;
 
   const reviewContext = gatherReviewContext(productId);
@@ -55,7 +56,7 @@ export async function generateAdCopy(productId, options = {}, mediaContext = nul
 
   const prompt = buildCopyPrompt(reviewContext, adLibraryContext, pastSuccesses, {
     copy_type, platform, tone, custom_instruction,
-  }, mediaContext);
+  }, mediaContext, videoAnalysis);
 
   // 미디어가 첨부되면 Vision API, 아니면 기존 텍스트 전용 API
   let result;
@@ -291,7 +292,7 @@ function gatherPastSuccesses(productId) {
 /**
  * Claude용 카피 생성 프롬프트 구성
  */
-function buildCopyPrompt(reviewCtx, adLibCtx, pastCtx, options, mediaContext = null) {
+function buildCopyPrompt(reviewCtx, adLibCtx, pastCtx, options, mediaContext = null, videoAnalysis = null) {
   const { copy_type, platform, tone, custom_instruction } = options;
 
   let prompt = `## 광고 카피 생성 요청
@@ -405,8 +406,13 @@ function buildCopyPrompt(reviewCtx, adLibCtx, pastCtx, options, mediaContext = n
   // 미디어 첨부 시 시각적 분석 지시
   if (mediaContext) {
     prompt += `\n---\n\n## 🖼️ 첨부 미디어 분석 지시\n\n`;
-    prompt += `이 요청에는 ${mediaContext.originalType === "video" ? "비디오에서 추출한 대표 프레임 이미지" : "이미지"}가 첨부되어 있습니다.\n`;
-    prompt += `첨부된 미디어의 시각적 요소(색상, 구도, 제품 외형, 분위기, 텍스트 등)를 분석하고 이를 광고 카피에 반영해주세요.\n`;
+    if (mediaContext.originalType === "video" && videoAnalysis) {
+      prompt += `이 요청에는 비디오에서 추출한 대표 프레임 이미지가 첨부되어 있으며, 별도의 AI 영상 분석 리포트도 함께 제공됩니다.\n`;
+      prompt += `대표 프레임의 시각적 요소와 아래 영상 분석 리포트를 모두 참고하여 카피를 작성해주세요.\n`;
+    } else {
+      prompt += `이 요청에는 ${mediaContext.originalType === "video" ? "비디오에서 추출한 대표 프레임 이미지" : "이미지"}가 첨부되어 있습니다.\n`;
+      prompt += `첨부된 미디어의 시각적 요소(색상, 구도, 제품 외형, 분위기, 텍스트 등)를 분석하고 이를 광고 카피에 반영해주세요.\n`;
+    }
     prompt += `카피는 이 이미지/비디오가 광고 크리에이티브로 함께 사용된다는 전제로 작성해주세요.\n`;
 
     if (mediaContext.emphasis) {
@@ -414,6 +420,13 @@ function buildCopyPrompt(reviewCtx, adLibCtx, pastCtx, options, mediaContext = n
       prompt += `사용자가 이 미디어에서 특히 강조하고 싶은 점: "${mediaContext.emphasis}"\n`;
       prompt += `이 강조 포인트를 카피의 핵심 메시지로 반영해주세요.\n`;
     }
+  }
+
+  // Gemini 영상 분석 리포트 주입
+  if (videoAnalysis) {
+    prompt += `\n---\n\n${videoAnalysis}\n`;
+    prompt += `\n위 영상 분석 리포트를 참고하여, 영상의 스토리/장면/감정 흐름을 카피에 반영해주세요.\n`;
+    prompt += `단순히 한 프레임만 보는 것이 아니라, 영상 전체의 서사와 메시지를 카피에 녹여주세요.\n`;
   }
 
   if (custom_instruction) {
