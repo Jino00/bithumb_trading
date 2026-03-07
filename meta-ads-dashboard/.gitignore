@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+*.db
+*.db-journal
+
+# 미디어 업로드 파일
+backend/uploads/
