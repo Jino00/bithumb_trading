@@ -123,14 +123,30 @@ export default function App() {
     }
   }, []);
 
-  // 비즈니스 포트폴리오 로드
+  // 비즈니스 포트폴리오 로드 (기본값: 오하이 갤럭시 액정보호필름 케이스 + 오하이 Ohi)
+  const DEFAULT_BUSINESS_ID = "1416669939538806";
+  const DEFAULT_ACCOUNT_ID = "act_24178740038427052";
+
   const loadBusinesses = useCallback(async () => {
     try {
       const data = await fetchMetaBusinesses();
       setBusinesses(data);
-      // 전체 광고계정도 함께 로드
-      const allAccounts = await fetchMetaAdAccounts();
-      setAdAccounts(allAccounts);
+
+      // 기본 비즈니스 선택 + 해당 광고계정 로드
+      const defaultBiz = data.find((b: MetaBusiness) => b.id === DEFAULT_BUSINESS_ID);
+      if (defaultBiz && !selectedBusinessId) {
+        setSelectedBusinessId(DEFAULT_BUSINESS_ID);
+        const accounts = await fetchBusinessAdAccounts(DEFAULT_BUSINESS_ID);
+        setAdAccounts(accounts);
+        // 기본 광고계정 선택
+        const defaultAcct = accounts.find((a: MetaAdAccount) => a.id === DEFAULT_ACCOUNT_ID);
+        if (defaultAcct && !selectedAccountId) {
+          setSelectedAccountId(DEFAULT_ACCOUNT_ID);
+        }
+      } else {
+        const allAccounts = await fetchMetaAdAccounts();
+        setAdAccounts(allAccounts);
+      }
     } catch {
       // Meta 미연결 시 무시
     }
@@ -179,10 +195,11 @@ export default function App() {
 
   useEffect(() => {
     const init = async () => {
-      await loadCampaigns();
+      // 비즈니스/광고계정 먼저 로드 → 기본값 설정 후 캠페인 로드
+      await loadBusinesses();
+      await loadCampaigns(dateRange, DEFAULT_ACCOUNT_ID);
       loadCompetitors();
       loadTrends();
-      loadBusinesses();
       // 초기 로드 시 판단도 자동 실행
       try {
         setJudgingAll(true);
