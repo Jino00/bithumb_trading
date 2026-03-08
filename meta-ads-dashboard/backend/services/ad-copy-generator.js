@@ -6,25 +6,33 @@ import { getTrendContextForCopy } from "./trend-bridge.js";
 const SYSTEM_PROMPT = `당신은 한국 시장 전문 Meta Ads 카피라이터입니다.
 제공된 고객 리뷰 인사이트와 경쟁사 광고 분석 데이터를 기반으로 효과적인 광고 카피를 작성합니다.
 
+██ 최우선 규칙 — primary_text 글자 수 제한 (절대 위반 금지) ██
+- primary_text는 반드시 한글 기준 40~55자 이내 (공백·이모지 포함)
+- 줄바꿈(\\n) 절대 금지. 반드시 한 줄로 작성
+- 해시태그(#) 절대 금지 — 해시태그는 primary_text에 넣지 않음
+- 이모지는 최대 1~2개만 허용
+- "더보기"를 눌러야 보이는 긴 카피는 실패한 카피임
+- 좋은 예: "지문 걱정 끝! 4,042명이 선택한 TPU 필름 ✨" (28자)
+- 나쁜 예: "😱 핸드폰 화면이 이렇게 더러워졌다고?\\n✅ 더럽..." (여러 줄, 100자 초과 = 실패)
+
 핵심 원칙:
 1. 고객이 실제로 사용하는 표현과 언급하는 장점을 카피에 반영
 2. 경쟁사 광고에서 검증된 메시징 패턴을 참고하되 차별화
 3. 약점/불만 포인트는 피하거나, 해결했음을 강조
 4. 데이터 근거(리뷰 수, 평점 등)를 활용하여 신뢰감 구축
-5. 주력 매체는 Instagram — 기본 문구(primary_text)는 인스타 피드에서 "더보기" 클릭 없이 한눈에 읽히는 길이로 작성 (한글 55자 이내). 길고 장황한 카피는 금지
-6. 이미지가 첨부된 경우: 시각적 요소(색상, 구도, 제품 외형, 분위기)를 분석하고 이를 카피에 자연스럽게 반영. 카피가 해당 이미지와 함께 광고에 사용된다는 전제로 작성
-7. 영상 분석 리포트가 제공된 경우: 장면 구성, 나레이션, 감정 흐름, 화면 텍스트 등을 카피에 깊이 반영. 단순 이미지 묘사가 아닌, 영상 전체의 서사와 메시지를 카피에 녹여야 함
+5. 이미지가 첨부된 경우: 시각적 요소를 분석하고 카피에 반영. 카피가 해당 이미지와 함께 광고에 사용된다는 전제로 작성
+6. 영상 분석 리포트가 제공된 경우: 영상 전체의 서사와 메시지를 카피에 녹여야 함
 
 반드시 아래 JSON 형식으로만 응답하세요.`;
 
 const COPY_JSON_FORMAT = `{
   "copies": [
     {
-      "primary_text": "기본 문구 — 인스타그램 피드에서 '더보기' 없이 한눈에 보여야 함. 한글 기준 55자 이내(영문 혼합 시 125자 이내). 핵심 메시지 1~2문장으로 압축. 이모지 1~2개 허용. 줄바꿈 없이 한 줄로 작성",
-      "headline": "제목 — 이미지/영상 아래 굵은 글씨. 25자 이내. 핵심 가치 한 줄 압축",
-      "description": "설명 — 제목 아래 보조 텍스트. 30자 이내. 리뷰 수, 혜택, 프로모션 등 보조 정보",
-      "cta": "CTA 버튼 텍스트 (SHOP_NOW, LEARN_MORE 등)",
-      "rationale": "이 카피를 작성한 근거 (어떤 리뷰 데이터/광고 패턴을 참고했는지)"
+      "primary_text": "40~55자 이내 한 줄 카피. 줄바꿈·해시태그 금지. 이모지 최대 2개. 예: '지문 걱정 끝! 4,042명이 선택한 TPU 필름 ✨'",
+      "headline": "제목 25자 이내. 핵심 가치 한 줄 압축",
+      "description": "설명 30자 이내. 리뷰 수·혜택·프로모션 등 보조 정보",
+      "cta": "SHOP_NOW 또는 LEARN_MORE",
+      "rationale": "이 카피를 작성한 근거"
     }
   ]
 }`;
@@ -76,10 +84,10 @@ export async function generateAdCopy(productId, options = {}, mediaContext = nul
   const parsed = parseClaudeJson(result, JSON.parse(generateMockCopy(reviewContext)));
 
   const copies = (parsed.copies || []).map((c) => ({
-    primary_text: c.primary_text || c.body || "",
-    headline: c.headline || "",
-    description: c.description || "",
-    body: c.primary_text || c.body || "",  // 하위 호환성 유지
+    primary_text: sanitizePrimaryText(c.primary_text || c.body || ""),
+    headline: (c.headline || "").substring(0, 25),
+    description: (c.description || "").substring(0, 30),
+    body: sanitizePrimaryText(c.primary_text || c.body || ""),  // 하위 호환성 유지
     cta: c.cta || "SHOP_NOW",
     rationale: c.rationale || "",
     data_sources: {
@@ -464,6 +472,42 @@ function extractUsedThemes(rationale, reviewCtx) {
     .filter((t) => rationale.includes(t.theme))
     .map((t) => t.theme)
     .slice(0, 3);
+}
+
+/**
+ * primary_text 후처리 — 인스타 피드에서 "더보기" 없이 보이도록 강제 정리
+ * 1. 줄바꿈 → 공백으로 치환 (한 줄로 만들기)
+ * 2. 해시태그 제거
+ * 3. 연속 공백/이모지 정리
+ * 4. 55자 초과 시 마지막 문장 부호 또는 공백 기준으로 자르기
+ */
+function sanitizePrimaryText(text) {
+  if (!text) return "";
+
+  // 줄바꿈 → 공백
+  let cleaned = text.replace(/[\n\r]+/g, " ");
+
+  // 해시태그 제거 (#단어)
+  cleaned = cleaned.replace(/#\S+/g, "");
+
+  // 연속 공백 정리
+  cleaned = cleaned.replace(/\s{2,}/g, " ").trim();
+
+  // 55자 이내면 그대로 반환
+  if (cleaned.length <= 55) return cleaned;
+
+  // 55자 초과: 55자까지 자르고 마지막 완전한 단어/문장에서 끊기
+  const truncated = cleaned.substring(0, 55);
+  const lastSpace = truncated.lastIndexOf(" ");
+  const lastPunct = Math.max(
+    truncated.lastIndexOf("."), truncated.lastIndexOf("!"),
+    truncated.lastIndexOf("?"), truncated.lastIndexOf("~"),
+    truncated.lastIndexOf(",")
+  );
+  const cutAt = Math.max(lastPunct, lastSpace, 30);
+
+  console.log(`[Ad Copy] primary_text truncated: ${cleaned.length}자 → ${cutAt}자`);
+  return cleaned.substring(0, cutAt).trim();
 }
 
 /**
