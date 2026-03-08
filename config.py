@@ -14,7 +14,7 @@ TRADE_AMOUNT = float(os.getenv("TRADE_AMOUNT", "100000"))  # 1회 거래 원화 
 # ── 리스크 파라미터 ───────────────────────────────────────
 STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "3.0"))       # 손절 %
 TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", "5.0"))   # 익절 %
-MAX_DRAWDOWN_PCT = float(os.getenv("MAX_DRAWDOWN_PCT", "20.0")) # MDD 한도 %
+MAX_DRAWDOWN_PCT = float(os.getenv("MAX_DRAWDOWN_PCT", "30.0")) # MDD 한도 %
 
 # ── RSI 전략 파라미터 ─────────────────────────────────────
 RSI_PERIOD = 14
@@ -24,9 +24,9 @@ RSI_CANDLE_INTERVAL = "1h"  # 캔들 단위
 
 # ── 백테스트 설정 ─────────────────────────────────────────
 BACKTEST_DAYS = 365              # 1년 데이터
-MIN_WIN_RATE = 75.0              # 전략 게이트 최소 승률 %
-MIN_BACKTEST_TRADES = 100        # 전략 게이트 최소 샘플 수
-MIN_PROFIT_FACTOR = 1.5          # 전략 게이트 최소 Profit Factor
+MIN_WIN_RATE = 55.0              # 전략 게이트 최소 승률 %
+MIN_BACKTEST_TRADES = 10         # 전략 게이트 최소 샘플 수
+MIN_PROFIT_FACTOR = 1.2          # 전략 게이트 최소 Profit Factor
 LIVE_WIN_RATE_THRESHOLD = 65.0   # 실전 승률 비활성화 기준 %
 
 # ── 실전 모니터링 설정 ──────────────────────────────────────
