@@ -1,5 +1,6 @@
 // Meta Pixel vs Cafe24 Admin API 크로스 검증 서비스 — 데이터 정합성 검증 + 고도화
 import { getDb } from "../db/database.js";
+import { roundN } from "./biz-metrics.js";
 
 /**
  * 크로스 검증: Meta Pixel 데이터 vs Cafe24 실제 주문 데이터
@@ -87,7 +88,7 @@ function aggregateCafe24(orders) {
     non_meta_orders: nonMetaOrders.length,
     no_utm_orders: noUtmOrders.length,
     no_utm_rate: orders.length > 0
-      ? round2((noUtmOrders.length / orders.length) * 100)
+      ? roundN((noUtmOrders.length / orders.length) * 100)
       : 0,
     by_campaign: byCampaign,
     avg_order_value: metaOrders.length > 0
@@ -113,10 +114,10 @@ function aggregateMeta(campaigns) {
 
   return {
     total_campaigns: campaigns.length,
-    total_spend: round2(totalSpend),
-    total_revenue: round2(totalRevenue),
+    total_spend: roundN(totalSpend),
+    total_revenue: roundN(totalRevenue),
     total_purchases: totalPurchases,
-    overall_roas: totalSpend > 0 ? round2(totalRevenue / totalSpend) : 0,
+    overall_roas: totalSpend > 0 ? roundN(totalRevenue / totalSpend) : 0,
     total_clicks: totalClicks,
     avg_cpa: totalPurchases > 0 ? Math.round(totalSpend / totalPurchases) : 0,
     avg_aov: totalPurchases > 0 ? Math.round(totalRevenue / totalPurchases) : 0,
@@ -176,26 +177,26 @@ function matchByUtm(metaCampaigns, cafe24Orders) {
       matched.push({
         campaign_name: camp.name,
         meta_campaign_id: camp.meta_campaign_id,
-        meta_spend: round2(camp.total_spend),
-        meta_revenue: round2(camp.revenue),
+        meta_spend: roundN(camp.total_spend),
+        meta_revenue: roundN(camp.revenue),
         meta_purchases: camp.purchase_count,
         meta_roas: camp.roas,
         cafe24_orders: bestMatch.orders,
-        cafe24_revenue: round2(bestMatch.revenue),
+        cafe24_revenue: roundN(bestMatch.revenue),
         cafe24_roas: camp.total_spend > 0
-          ? round2(bestMatch.revenue / camp.total_spend)
+          ? roundN(bestMatch.revenue / camp.total_spend)
           : 0,
-        revenue_gap: round2(camp.revenue - bestMatch.revenue),
+        revenue_gap: roundN(camp.revenue - bestMatch.revenue),
         revenue_gap_pct: camp.revenue > 0
-          ? round2(((camp.revenue - bestMatch.revenue) / camp.revenue) * 100)
+          ? roundN(((camp.revenue - bestMatch.revenue) / camp.revenue) * 100)
           : 0,
         purchase_gap: camp.purchase_count - bestMatch.orders,
       });
     } else {
       unmatched_meta.push({
         campaign_name: camp.name,
-        meta_spend: round2(camp.total_spend),
-        meta_revenue: round2(camp.revenue),
+        meta_spend: roundN(camp.total_spend),
+        meta_revenue: roundN(camp.revenue),
         meta_purchases: camp.purchase_count,
         reason: "UTM 캠페인 매칭 실패 — Cafe24 주문에서 해당 캠페인명의 utm_campaign 없음",
       });
@@ -208,7 +209,7 @@ function matchByUtm(metaCampaigns, cafe24Orders) {
       unmatched_cafe24.push({
         utm_campaign: utmKey,
         orders: utmData.orders,
-        revenue: round2(utmData.revenue),
+        revenue: roundN(utmData.revenue),
         reason: "Meta 캠페인과 매칭 실패 — 캠페인명이 다르거나 삭제된 캠페인",
       });
     }
@@ -222,7 +223,7 @@ function matchByUtm(metaCampaigns, cafe24Orders) {
     unmatched_meta,
     unmatched_cafe24,
     match_rate: totalMeta > 0
-      ? round2((totalMatched / totalMeta) * 100)
+      ? roundN((totalMatched / totalMeta) * 100)
       : 0,
     total_matched: totalMatched,
     total_meta: totalMeta,
@@ -249,7 +250,7 @@ function diagnoseDiscrepancies(metaTotal, cafe24Total, utmMatching) {
   // 2. 구매 건수 불일치
   if (metaTotal.total_purchases > 0 && cafe24Total.meta_attributed_orders > 0) {
     const purchaseGap = Math.abs(metaTotal.total_purchases - cafe24Total.meta_attributed_orders);
-    const gapPct = round2((purchaseGap / Math.max(metaTotal.total_purchases, cafe24Total.meta_attributed_orders)) * 100);
+    const gapPct = roundN((purchaseGap / Math.max(metaTotal.total_purchases, cafe24Total.meta_attributed_orders)) * 100);
 
     if (gapPct > 30) {
       issues.push({
@@ -268,7 +269,7 @@ function diagnoseDiscrepancies(metaTotal, cafe24Total, utmMatching) {
   // 3. 매출 불일치
   if (metaTotal.total_revenue > 0 && cafe24Total.meta_attributed_revenue > 0) {
     const revGap = Math.abs(metaTotal.total_revenue - cafe24Total.meta_attributed_revenue);
-    const revGapPct = round2((revGap / Math.max(metaTotal.total_revenue, cafe24Total.meta_attributed_revenue)) * 100);
+    const revGapPct = roundN((revGap / Math.max(metaTotal.total_revenue, cafe24Total.meta_attributed_revenue)) * 100);
 
     if (revGapPct > 20) {
       issues.push({
@@ -354,7 +355,7 @@ function computeCorrectedMetrics(metaTotal, cafe24Total, utmMatching) {
     purchaseSource = "cafe24_actual";
   }
 
-  const correctedRoas = metaSpend > 0 ? round2(bestRevenue / metaSpend) : 0;
+  const correctedRoas = metaSpend > 0 ? roundN(bestRevenue / metaSpend) : 0;
   const correctedCpa = bestPurchases > 0 ? Math.round(metaSpend / bestPurchases) : 0;
   const correctedAov = bestPurchases > 0 ? Math.round(bestRevenue / bestPurchases) : 0;
 
@@ -363,14 +364,14 @@ function computeCorrectedMetrics(metaTotal, cafe24Total, utmMatching) {
     roas_source: revenueSource,
     meta_roas: metaTotal.overall_roas,
     cafe24_roas: metaSpend > 0 && cafe24Total.meta_attributed_revenue > 0
-      ? round2(cafe24Total.meta_attributed_revenue / metaSpend)
+      ? roundN(cafe24Total.meta_attributed_revenue / metaSpend)
       : null,
     corrected_cpa: correctedCpa,
     cpa_source: purchaseSource,
     corrected_aov: correctedAov,
     aov_source: revenueSource,
-    total_spend: round2(metaSpend),
-    best_revenue: round2(bestRevenue),
+    total_spend: roundN(metaSpend),
+    best_revenue: roundN(bestRevenue),
     best_purchases: bestPurchases,
     confidence: cafe24Total.meta_attributed_orders > 0 ? "high" : "low",
     note: revenueSource === "cafe24_actual"
@@ -499,6 +500,4 @@ function sumField(arr, field) {
   return arr.reduce((sum, item) => sum + (item[field] || 0), 0);
 }
 
-function round2(n) {
-  return Math.round(n * 100) / 100;
-}
+// roundN() 삭제 → roundN() from biz-metrics.js (SSOT)

@@ -1,7 +1,9 @@
 // 메인 대시보드 — KPI 요약 카드 + 차트 + 기간 필터
-import { DollarSign, MousePointerClick, Target, Eye, Loader2, Building2, ChevronDown, TrendingUp, ShoppingCart } from "lucide-react";
+// ⚠️ 재무 계산은 백엔드 API(biz-metrics.js)가 담당. 프론트에서 재계산 금지 (SSOT 원칙).
+import { useState, useEffect, useCallback } from "react";
+import { DollarSign, MousePointerClick, Target, Eye, Loader2, Building2, ChevronDown, TrendingUp, ShoppingCart, Wallet } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
-import { Campaign, DatePeriod, MetaBusiness, MetaAdAccount } from "../lib/api";
+import { Campaign, DatePeriod, MetaBusiness, MetaAdAccount, fetchProfitability, ProfitabilityData } from "../lib/api";
 import { formatCurrency, formatNumber } from "../lib/utils";
 
 const DATE_RANGE_OPTIONS: { value: DatePeriod; label: string }[] = [
@@ -52,6 +54,22 @@ function KpiCard({ icon: Icon, label, value, subtext, color }: {
 const COLORS = ["#10B981", "#F59E0B", "#EF4444", "#6366F1", "#8B5CF6"];
 
 export default function DashboardSummary({ campaigns, dateRange, onDateRangeChange, loading, activeOnly, onActiveOnlyChange, businesses, selectedBusinessId, onBusinessChange, adAccounts, selectedAccountId, onAccountChange }: Props) {
+  // 수익성 데이터는 백엔드 API에서 가져옴 (프론트 재계산 금지 — SSOT)
+  const [profitData, setProfitData] = useState<ProfitabilityData | null>(null);
+
+  const loadProfitability = useCallback(async () => {
+    try {
+      const data = await fetchProfitability(dateRange);
+      setProfitData(data);
+    } catch {
+      setProfitData(null);
+    }
+  }, [dateRange]);
+
+  useEffect(() => {
+    loadProfitability();
+  }, [loadProfitability]);
+
   const totalSpend = campaigns.reduce((sum, c) => sum + c.total_spend, 0);
   const totalRevenue = campaigns.reduce((sum, c) => sum + (c.revenue || 0), 0);
   const totalImpressions = campaigns.reduce((sum, c) => sum + c.impressions, 0);
@@ -59,6 +77,9 @@ export default function DashboardSummary({ campaigns, dateRange, onDateRangeChan
   const totalPurchases = campaigns.reduce((sum, c) => sum + (c.purchase_count || 0), 0);
   const overallRoas = totalSpend > 0 ? totalRevenue / totalSpend : 0;
   const avgCpa = totalPurchases > 0 ? totalSpend / totalPurchases : 0;
+
+  // 수익성은 서버 응답 그대로 사용
+  const profit = profitData?.summary;
 
   const barData = campaigns.map((c) => ({
     name: c.name.length > 15 ? c.name.substring(0, 15) + "..." : c.name,
@@ -153,7 +174,7 @@ export default function DashboardSummary({ campaigns, dateRange, onDateRangeChan
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <KpiCard
           icon={DollarSign}
           label="총 광고비"
@@ -176,6 +197,19 @@ export default function DashboardSummary({ campaigns, dateRange, onDateRangeChan
           color={overallRoas >= 2 ? "bg-green-500" : overallRoas >= 1 ? "bg-yellow-500" : "bg-red-500"}
         />
         <KpiCard
+          icon={Wallet}
+          label="순이익 (원가 반영)"
+          value={profit ? formatCurrency(profit.total_net_profit) : "-"}
+          subtext={
+            profit
+              ? profit.is_profitable
+                ? `ROI ${profit.overall_true_roi}% | ${profit.profitable_campaigns}/${profit.total_campaigns} 흑자`
+                : `원가+광고비 > 매출 | 적자`
+              : "로딩 중"
+          }
+          color={profit ? (profit.is_profitable ? "bg-emerald-600" : "bg-red-600") : "bg-gray-400"}
+        />
+        <KpiCard
           icon={MousePointerClick}
           label="클릭 / CTR"
           value={formatNumber(totalClicks)}
@@ -196,6 +230,15 @@ export default function DashboardSummary({ campaigns, dateRange, onDateRangeChan
           subtext="Total impressions"
           color="bg-gray-500"
         />
+        {profit && profit.total_cogs > 0 && (
+          <KpiCard
+            icon={DollarSign}
+            label="원가 합계 (COGS)"
+            value={formatCurrency(profit.total_cogs)}
+            subtext={`매출 대비 ${profit.total_revenue > 0 ? ((profit.total_cogs / profit.total_revenue) * 100).toFixed(0) : 0}%`}
+            color="bg-orange-500"
+          />
+        )}
       </div>
 
       {/* Charts */}

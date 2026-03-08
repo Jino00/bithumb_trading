@@ -19,6 +19,11 @@ import {
 } from "../services/trend-intelligence.js";
 import { crossValidate } from "../services/data-cross-validator.js";
 import { syncCafe24OrdersJob } from "../services/cafe24-sync-job.js";
+import {
+  fetchAccountInsights,
+  mapAccountInsightToSchema,
+} from "../services/meta-api.js";
+import { calcCampaignProfitability, calcProfitabilitySummary } from "../services/biz-metrics.js";
 
 const router = Router();
 
@@ -83,19 +88,176 @@ function generateMockAnalysis(_prompt) {
   });
 }
 
-// ─── 규칙 기반 자동 판단 (AI 없이 즉시 실행, 무료) ───
-router.post("/judge-all", (_req, res) => {
+// ─── 수익성 분석 API (원가 기반, biz-metrics SSOT 사용) ───
+router.get("/profitability", async (req, res) => {
   try {
     const db = getDb();
-    const campaigns = db.prepare("SELECT * FROM campaigns WHERE source = 'meta'").all();
-    if (campaigns.length === 0) {
-      return res.json({ judgments: [], summary: null, message: "No Meta campaigns found. Sync first." });
+    const period = req.query.period || "30d";
+    const validPeriods = ["1d", "7d", "15d", "30d"];
+    if (!validPeriods.includes(period)) {
+      return res.status(400).json({ error: `Invalid period. Use: ${validPeriods.join(", ")}` });
     }
 
-    const { judgments, summary } = judgeAllCampaigns(campaigns);
+    // Meta API에서 기간별 데이터 조회 (DB 누적 데이터 사용 금지 — CLAUDE.md 규칙)
+    const cred = db.prepare("SELECT access_token, selected_ad_account_id FROM meta_credentials WHERE user_id = 'default'").get();
+    const adAccountId = cred?.selected_ad_account_id;
 
-    // 판정 결과를 DB에 저장
-    const updateStmt = db.prepare(`
+    let campaigns = [];
+    if (cred && adAccountId) {
+      const result = await fetchAccountInsights(cred.access_token, adAccountId, period);
+      if (result.error) {
+        return res.status(400).json({ error: `Meta API error: ${result.error}` });
+      }
+      campaigns = (result.data || []).map((insight, idx) => ({
+        id: 10000 + idx,
+        ...mapAccountInsightToSchema(insight, period),
+        source: "meta",
+      }));
+    } else {
+      campaigns = db.prepare("SELECT * FROM campaigns WHERE source = 'meta' AND status = 'active'").all();
+    }
+
+    // 원가 데이터 매칭
+    const costs = db.prepare("SELECT * FROM product_costs").all();
+    const costMap = {};
+    for (const c of costs) costMap[c.campaign_name] = c;
+
+    // 수익성 계산 — biz-metrics.js SSOT 함수 사용
+    const results = campaigns.map((camp) => {
+      const cost = costMap[camp.name];
+      const p = calcCampaignProfitability({
+        costPrice: cost?.cost_price || 0,
+        purchases: camp.purchase_count || 0,
+        revenue: camp.revenue || 0,
+        adSpend: camp.total_spend || 0,
+        aov: camp.aov || 0,
+      });
+
+      return {
+        campaign_id: camp.id,
+        campaign_name: camp.name,
+        product_name: cost?.product_name || "미등록",
+        cost_price: cost?.cost_price || 0,
+        purchases: camp.purchase_count || 0,
+        revenue: camp.revenue || 0,
+        ad_spend: camp.total_spend || 0,
+        roas: camp.roas,
+        ...p,
+      };
+    });
+
+    // 집계 — biz-metrics.js SSOT 함수 사용
+    const summaryInput = results.map((r) => ({
+      revenue: r.revenue,
+      adSpend: r.ad_spend,
+      cogs: r.cogs,
+      isProfitable: r.isProfitable,
+    }));
+    const s = calcProfitabilitySummary(summaryInput);
+
+    res.json({
+      period,
+      campaigns: results,
+      summary: {
+        total_revenue: s.totalRevenue,
+        total_cogs: s.totalCogs,
+        total_ad_spend: s.totalAdSpend,
+        total_gross_profit: s.totalRevenue - s.totalCogs,
+        total_net_profit: s.totalNetProfit,
+        overall_net_margin: s.overallNetMargin,
+        overall_true_roi: s.overallTrueRoi,
+        profitable_campaigns: s.profitableCount,
+        total_campaigns: s.totalCampaigns,
+        is_profitable: s.isProfitable,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── 원가 관리 API ───
+router.get("/product-costs", (_req, res) => {
+  try {
+    const db = getDb();
+    const costs = db.prepare("SELECT * FROM product_costs ORDER BY campaign_name").all();
+    res.json(costs);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post("/product-costs", (req, res) => {
+  try {
+    const db = getDb();
+    const { campaign_name, product_name, cost_price } = req.body;
+    if (!campaign_name || !product_name || cost_price == null) {
+      return res.status(400).json({ error: "campaign_name, product_name, cost_price 필요" });
+    }
+    const camp = db.prepare("SELECT id, meta_campaign_id FROM campaigns WHERE name = ?").get(campaign_name);
+    db.prepare(
+      "INSERT OR REPLACE INTO product_costs (campaign_id, meta_campaign_id, campaign_name, product_name, cost_price) VALUES (?, ?, ?, ?, ?)"
+    ).run(camp?.id || null, camp?.meta_campaign_id || null, campaign_name, product_name, cost_price);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── 규칙 기반 자동 판단 (AI 없이 즉시 실행, 무료) ───
+router.post("/judge-all", async (req, res) => {
+  try {
+    const db = getDb();
+    const period = req.query.period || req.body.period || "30d";
+    const validPeriods = ["1d", "7d", "15d", "30d"];
+    if (!validPeriods.includes(period)) {
+      return res.status(400).json({ error: `Invalid period. Use: ${validPeriods.join(", ")}` });
+    }
+
+    // Meta API에서 기간별 데이터를 가져옴 (DB 누적 데이터 대신)
+    const cred = db.prepare("SELECT access_token, selected_ad_account_id FROM meta_credentials WHERE user_id = 'default'").get();
+    const adAccountId = cred?.selected_ad_account_id;
+
+    let campaigns = [];
+    if (cred && adAccountId) {
+      const result = await fetchAccountInsights(cred.access_token, adAccountId, period);
+      if (result.error) {
+        return res.status(400).json({ error: `Meta API error: ${result.error}` });
+      }
+      campaigns = (result.data || []).map((insight, idx) => ({
+        id: 10000 + idx,
+        ...mapAccountInsightToSchema(insight, period),
+        source: "meta",
+      }));
+    } else {
+      // Meta 미연결 시 DB fallback
+      campaigns = db.prepare("SELECT * FROM campaigns WHERE source = 'meta' AND status = 'active'").all();
+    }
+
+    if (campaigns.length === 0) {
+      return res.json({ judgments: [], summary: null, period, message: "No Meta campaigns found. Sync first." });
+    }
+
+    // 원가 데이터 주입
+    const costs = db.prepare("SELECT * FROM product_costs").all();
+    const costMap = {};
+    for (const c of costs) costMap[c.campaign_name] = c;
+    for (const camp of campaigns) {
+      const cost = costMap[camp.name];
+      if (cost) {
+        camp.cost_price = cost.cost_price;
+        camp.product_name = cost.product_name;
+      }
+    }
+
+    const { judgments, summary } = judgeAllCampaigns(campaigns, period);
+
+    // 판정 결과를 DB에 저장 (meta_campaign_id로 매칭)
+    const updateByMetaId = db.prepare(`
+      UPDATE campaigns SET ai_verdict=?, ai_recommendation=?, ai_fix_type=?, updated_at=datetime('now')
+      WHERE meta_campaign_id=?
+    `);
+    const updateById = db.prepare(`
       UPDATE campaigns SET ai_verdict=?, ai_recommendation=?, ai_fix_type=?, updated_at=datetime('now')
       WHERE id=?
     `);
@@ -103,15 +265,17 @@ router.post("/judge-all", (_req, res) => {
       for (const j of items) {
         const recommendation = j.reasons.join(" | ") + " → " + j.recommendations.join("; ");
         const fixType = j.verdict === "PAUSE" ? "PAUSE" : j.verdict === "MODIFY" ? "CREATIVE_REFRESH" : null;
-        const campId = campaigns.find(c => c.name === j.campaign_name)?.id;
-        if (campId) {
-          updateStmt.run(j.verdict, recommendation, fixType, campId);
+        const camp = campaigns.find(c => c.name === j.campaign_name);
+        if (camp?.meta_campaign_id) {
+          updateByMetaId.run(j.verdict, recommendation, fixType, camp.meta_campaign_id);
+        } else if (camp?.id && camp.id < 10000) {
+          updateById.run(j.verdict, recommendation, fixType, camp.id);
         }
       }
     });
     saveAll(judgments);
 
-    res.json({ judgments, summary });
+    res.json({ judgments, summary, period });
   } catch (err) {
     console.error("Judge error:", err);
     res.status(500).json({ error: err.message });

@@ -12,14 +12,18 @@ import {
   DollarSign,
   Globe,
   Film,
+  Lightbulb,
+  Sparkles,
 } from "lucide-react";
 import {
   AdCopy,
   FacebookPage,
   CampaignPublishRequest,
   PublishResult,
+  CampaignRecommendations,
   fetchFacebookPages,
   publishCampaignToMeta,
+  fetchCampaignRecommendations,
 } from "../lib/api";
 
 interface Props {
@@ -72,6 +76,10 @@ export default function CampaignPublishModal({
   const [error, setError] = useState<string | null>(null);
   const [publishResult, setPublishResult] = useState<PublishResult | null>(null);
 
+  // 학습 기반 추천
+  const [recommendations, setRecommendations] = useState<CampaignRecommendations | null>(null);
+  const [recsLoading, setRecsLoading] = useState(false);
+
   // Form state
   const [campaignName, setCampaignName] = useState(
     `${(copy.headline || "캠페인").substring(0, 40)} - ${new Date().toLocaleDateString("ko-KR")}`
@@ -87,6 +95,17 @@ export default function CampaignPublishModal({
   const [selectedPageId, setSelectedPageId] = useState("");
   const [linkUrl, setLinkUrl] = useState("");
   const [ctaType, setCtaType] = useState("LEARN_MORE");
+
+  // Step 2 진입 시 학습 기반 추천 로드
+  useEffect(() => {
+    if (step === 2 && !recommendations && !recsLoading) {
+      setRecsLoading(true);
+      fetchCampaignRecommendations()
+        .then((data) => setRecommendations(data))
+        .catch(() => {}) // 실패해도 무시 (추천은 선택사항)
+        .finally(() => setRecsLoading(false));
+    }
+  }, [step]);
 
   // Step 3 진입 시 Facebook Pages 로드
   useEffect(() => {
@@ -289,6 +308,104 @@ export default function CampaignPublishModal({
           {/* Step 2: 예산 + 타겟팅 */}
           {step === 2 && (
             <div className="space-y-5">
+              {/* 학습 기반 추천 패널 */}
+              {recsLoading ? (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-center gap-2 text-sm text-blue-600">
+                  <Loader2 className="w-4 h-4 animate-spin" /> 학습 기반 추천을 불러오는 중...
+                </div>
+              ) : recommendations && (recommendations.recommended_budget || recommendations.recommended_objective || recommendations.recommended_targeting) ? (
+                <div className="bg-gradient-to-r from-amber-50 to-yellow-50 border border-amber-200 rounded-lg p-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Lightbulb className="w-4 h-4 text-amber-600" />
+                    <span className="text-sm font-semibold text-amber-800">
+                      학습 기반 추천 설정
+                    </span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-200 text-amber-700 font-medium">
+                      {recommendations.data_maturity} 단계
+                    </span>
+                  </div>
+
+                  <div className="space-y-2">
+                    {recommendations.recommended_budget && (
+                      <div className="flex items-center justify-between bg-white rounded-md px-3 py-2 border border-amber-100">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <DollarSign className="w-3.5 h-3.5 text-amber-600" />
+                            <span className="text-xs font-medium text-gray-700">일예산</span>
+                            <span className="text-xs font-bold text-amber-700">
+                              ₩{Number(recommendations.recommended_budget.value).toLocaleString()}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-gray-500 mt-0.5 ml-5">
+                            {recommendations.recommended_budget.evidence}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => setDailyBudget(Number(recommendations.recommended_budget!.value))}
+                          className="text-[10px] px-2 py-1 bg-amber-100 text-amber-700 rounded hover:bg-amber-200 transition-colors font-medium flex items-center gap-0.5"
+                        >
+                          <Sparkles className="w-3 h-3" /> 적용
+                        </button>
+                      </div>
+                    )}
+
+                    {recommendations.recommended_objective && (
+                      <div className="flex items-center justify-between bg-white rounded-md px-3 py-2 border border-amber-100">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <Target className="w-3.5 h-3.5 text-amber-600" />
+                            <span className="text-xs font-medium text-gray-700">목표</span>
+                            <span className="text-xs font-bold text-amber-700">
+                              {OBJECTIVES.find((o) => o.value === recommendations.recommended_objective!.value)?.label || String(recommendations.recommended_objective.value)}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-gray-500 mt-0.5 ml-5">
+                            {recommendations.recommended_objective.evidence}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => setObjective(String(recommendations.recommended_objective!.value))}
+                          className="text-[10px] px-2 py-1 bg-amber-100 text-amber-700 rounded hover:bg-amber-200 transition-colors font-medium flex items-center gap-0.5"
+                        >
+                          <Sparkles className="w-3 h-3" /> 적용
+                        </button>
+                      </div>
+                    )}
+
+                    {recommendations.recommended_targeting && (
+                      <div className="flex items-center justify-between bg-white rounded-md px-3 py-2 border border-amber-100">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <Globe className="w-3.5 h-3.5 text-amber-600" />
+                            <span className="text-xs font-medium text-gray-700">타겟</span>
+                            <span className="text-xs font-bold text-amber-700">
+                              {recommendations.recommended_targeting.value === "broad" ? "Broad (넓은 타겟)" : String(recommendations.recommended_targeting.value)}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-gray-500 mt-0.5 ml-5">
+                            {recommendations.recommended_targeting.evidence}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {recommendations.benchmarks && (
+                    <div className="flex gap-3 pt-1 border-t border-amber-200">
+                      <div className="text-[10px] text-gray-500">
+                        평균 ROAS <span className="font-bold text-gray-700">{recommendations.benchmarks.avg_roas.toFixed(2)}x</span>
+                      </div>
+                      <div className="text-[10px] text-gray-500">
+                        평균 CTR <span className="font-bold text-gray-700">{recommendations.benchmarks.avg_ctr.toFixed(2)}%</span>
+                      </div>
+                      <div className="text-[10px] text-gray-500">
+                        평균 CPC <span className="font-bold text-gray-700">₩{Math.round(recommendations.benchmarks.avg_cpc).toLocaleString()}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1.5">
                   <DollarSign className="w-4 h-4 inline mr-1" />

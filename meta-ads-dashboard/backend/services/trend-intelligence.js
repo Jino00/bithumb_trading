@@ -2,6 +2,7 @@
 // 스냅샷이 쌓일수록 우리만의 레퍼런스 데이터가 만들어지고,
 // 의사결정의 근거(back up data)로 사용된다.
 import { getDb } from "../db/database.js";
+import { roundN } from "./biz-metrics.js";
 
 // ─── 추적 대상 메트릭 정의 (광고 지표 + 자사몰 퍼널 지표) ───
 const AD_METRICS = ["roas", "ctr", "cpc", "frequency", "cpa", "aov"];
@@ -261,14 +262,14 @@ function computeTimeseriesTrend(values) {
 
   return {
     direction,
-    change7d: round2(change7d),
-    change14d: round2(change14d),
-    change30d: round2(change30d),
-    ma7d: round2(ma7d),
-    ma14d: round2(ma14d),
-    ma30d: round2(ma30d),
-    currentValue: round2(current),
-    volatility: round2(volatility),
+    change7d: roundN(change7d),
+    change14d: roundN(change14d),
+    change30d: roundN(change30d),
+    ma7d: roundN(ma7d),
+    ma14d: roundN(ma14d),
+    ma30d: roundN(ma30d),
+    currentValue: roundN(current),
+    volatility: roundN(volatility),
   };
 }
 
@@ -341,7 +342,7 @@ function recomputeActionEffectiveness(db) {
 
       upsert.run(
         s.action_type, s.stage, s.total, s.improved, s.unchanged,
-        s.worsened, round2(avgRoasChange), round2(avgCtrChange), round2(successRate)
+        s.worsened, roundN(avgRoasChange), roundN(avgCtrChange), roundN(successRate)
       );
       count++;
     }
@@ -358,14 +359,20 @@ function inferDiagnosisStage(actionType) {
   const stageMap = {
     creative_change: "광고 소재",
     copy_change: "광고 소재",
+    creative_refresh: "광고 소재",
     targeting_change: "타겟팅",
     audience_expansion: "타겟팅",
+    targeting_broaden: "타겟팅",
     landing_page_improvement: "랜딩 페이지",
     product_page_update: "상품 페이지",
     price_adjustment: "상품 페이지",
     checkout_optimization: "결제",
     cart_recovery: "장바구니",
     budget_change: "예산",
+    budget_increase: "예산",
+    budget_decrease: "예산",
+    pause: "캠페인 운영",
+    resume: "캠페인 운영",
     frequency_cap: "광고 피로",
   };
   return stageMap[actionType] || "기타";
@@ -485,7 +492,7 @@ export function getCampaignHealthReport(campaignId) {
       current_value: value,
       benchmark_avg: bench?.avg || 0,
       benchmark_median: bench?.median || 0,
-      vs_avg: bench?.avg > 0 ? round2(((value - bench.avg) / bench.avg) * 100) : 0,
+      vs_avg: bench?.avg > 0 ? roundN(((value - bench.avg) / bench.avg) * 100) : 0,
       position: getPosition(value, bench),
       trend_direction: trend?.direction || "unknown",
       trend_7d_change: trend?.change_7d || 0,
@@ -515,9 +522,9 @@ export function getCampaignHealthReport(campaignId) {
     const value = funnelValues[metric] || 0;
 
     funnelReport[metric] = {
-      current_value: round2(value),
-      benchmark_avg: bench?.avg ? round2(bench.avg) : 0,
-      vs_avg: bench?.avg > 0 ? round2(((value - bench.avg) / bench.avg) * 100) : 0,
+      current_value: roundN(value),
+      benchmark_avg: bench?.avg ? roundN(bench.avg) : 0,
+      vs_avg: bench?.avg > 0 ? roundN(((value - bench.avg) / bench.avg) * 100) : 0,
       position: getPosition(value, bench),
       trend_direction: trend?.direction || "unknown",
       trend_7d_change: trend?.change_7d || 0,
@@ -543,7 +550,7 @@ export function getCampaignHealthReport(campaignId) {
 /**
  * 데이터 성숙도 평가 — 학습에 필요한 데이터가 얼마나 쌓였는지
  */
-function assessDataMaturity(db) {
+export function assessDataMaturity(db) {
   const snapshotCount = db.prepare("SELECT COUNT(*) as cnt FROM campaign_snapshots").get().cnt;
   const improvementCount = db.prepare(
     "SELECT COUNT(*) as cnt FROM improvement_log WHERE result_verdict IS NOT NULL"
@@ -642,7 +649,7 @@ function assessRelevance(campaign, effectiveness) {
   // 성공률 가중치
   score *= effectiveness.success_rate;
 
-  return round2(score);
+  return roundN(score);
 }
 
 // ─── 유틸리티 ───
@@ -685,14 +692,14 @@ function computeStatistics(sortedValues) {
   const avg = sum / n;
 
   return {
-    avg: round2(avg),
-    median: round2(percentile(sorted, 50)),
-    p25: round2(percentile(sorted, 25)),
-    p75: round2(percentile(sorted, 75)),
-    p90: round2(percentile(sorted, 90)),
-    min: round2(sorted[0]),
-    max: round2(sorted[n - 1]),
-    stdDev: round2(stdDev(sorted)),
+    avg: roundN(avg),
+    median: roundN(percentile(sorted, 50)),
+    p25: roundN(percentile(sorted, 25)),
+    p75: roundN(percentile(sorted, 75)),
+    p90: roundN(percentile(sorted, 90)),
+    min: roundN(sorted[0]),
+    max: roundN(sorted[n - 1]),
+    stdDev: roundN(stdDev(sorted)),
   };
 }
 
@@ -727,9 +734,7 @@ function stdDev(arr) {
   return Math.sqrt(variance);
 }
 
-function round2(n) {
-  return Math.round(n * 100) / 100;
-}
+// roundN() 삭제 → roundN() from biz-metrics.js (SSOT)
 
 function getDateNDaysAgo(n) {
   const d = new Date();

@@ -12,6 +12,7 @@ import productsRouter from "./routes/products.js";
 import adCopyRouter from "./routes/ad-copy.js";
 import campaignPublishRouter from "./routes/campaign-publish.js";
 import cafe24Router from "./routes/cafe24.js";
+import actionsRouter from "./routes/actions.js";
 import { getDb } from "./db/database.js";
 import { startScheduler } from "./scheduler.js";
 
@@ -36,6 +37,7 @@ app.use("/api/products", productsRouter);
 app.use("/api/ad-copy", adCopyRouter);
 app.use("/api/campaign-publish", campaignPublishRouter);
 app.use("/api/cafe24", cafe24Router);
+app.use("/api/actions", actionsRouter);
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });

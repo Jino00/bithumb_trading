@@ -207,8 +207,8 @@ export interface JudgeResult {
   summary: JudgeSummary;
 }
 
-export const judgeAllCampaigns = () =>
-  api.post<JudgeResult>("/analysis/judge-all").then((r) => r.data);
+export const judgeAllCampaigns = (period: DatePeriod = "30d") =>
+  api.post<JudgeResult>(`/analysis/judge-all?period=${period}`).then((r) => r.data);
 
 // Phase 4: 성과 트렌드 + 개선 추적
 export interface CampaignSnapshot {
@@ -351,6 +351,61 @@ export interface RecomputeResult {
   computed: { benchmarks: number; trends: number; effectiveness: number };
   message: string;
 }
+
+// ─── 제품 원가 데이터 ───
+export interface ProductCost {
+  id: number;
+  campaign_id: number | null;
+  meta_campaign_id: string | null;
+  campaign_name: string;
+  product_name: string;
+  cost_price: number;
+}
+
+export const fetchProductCosts = () =>
+  api.get<ProductCost[]>("/analysis/product-costs").then((r) => r.data);
+
+// ─── 수익성 분석 (원가 기반) ───
+export interface ProfitabilityResult {
+  campaign_id: number;
+  campaign_name: string;
+  product_name: string;
+  cost_price: number;
+  purchases: number;
+  revenue: number;
+  ad_spend: number;
+  cogs: number;
+  gross_profit: number;
+  net_profit: number;
+  gross_margin: number;
+  net_margin: number;
+  true_roi: number;
+  roas: number;
+  break_even_roas: number;
+  is_profitable: boolean;
+}
+
+export interface ProfitabilitySummary {
+  total_revenue: number;
+  total_cogs: number;
+  total_ad_spend: number;
+  total_gross_profit: number;
+  total_net_profit: number;
+  overall_net_margin: number;
+  overall_true_roi: number;
+  profitable_campaigns: number;
+  total_campaigns: number;
+  is_profitable: boolean;
+}
+
+export interface ProfitabilityData {
+  period: string;
+  campaigns: ProfitabilityResult[];
+  summary: ProfitabilitySummary;
+}
+
+export const fetchProfitability = (period: DatePeriod = "30d") =>
+  api.get<ProfitabilityData>(`/analysis/profitability?period=${period}`).then((r) => r.data);
 
 export const fetchBenchmarks = (period: string = "30d") =>
   api.get<BenchmarkData>(`/analysis/benchmarks?period=${period}`).then((r) => r.data);
@@ -1142,6 +1197,145 @@ export const fetchCafe24MetaOrders = (startDate?: string, endDate?: string) => {
   return api.get<Cafe24MetaOrders>(`/cafe24/meta-orders?${params}`).then((r) => r.data);
 };
 
+// ─── 일일 리뷰 액션 큐 (자동 캠페인 리뷰 → 승인 → 실행) ───
+
+export interface ActionQueueItem {
+  id: number;
+  review_run_id: number;
+  campaign_name: string;
+  meta_campaign_id: string;
+  action_type: "pause" | "budget_increase" | "budget_decrease" | "resume" | "targeting_broaden" | "creative_refresh";
+  current_value: string;
+  proposed_value: string;
+  reason: string;
+  verdict: string;
+  score: number;
+  status: "pending" | "approved" | "rejected" | "executed" | "failed" | "manual_pending";
+  created_at: string;
+  acted_at: string | null;
+  executed_at: string | null;
+  execution_result: string | null;
+  // ─── 진단 데이터 (campaign-judge.js 결과) ───
+  recommendations_json: string | null;
+  funnel_diagnosis_json: string | null;
+  smart_recommendations_json: string | null;
+  benchmark_comparison_json: string | null;
+  profitability_json: string | null;
+  adset_id: string | null;
+  improvement_log_id: number | null;
+}
+
+export interface FunnelDiagnosis {
+  stage: string;
+  diagnosis: string;
+  severity: "critical" | "warning" | "info" | "good";
+  evidence: string;
+  actions: string[];
+}
+
+export interface ImprovementResult {
+  measured: boolean;
+  before_roas?: number;
+  after_roas?: number;
+  before_ctr?: number;
+  after_ctr?: number;
+  roas_change?: number | null;
+  ctr_change?: number | null;
+  result_verdict?: "improved" | "unchanged" | "worsened" | null;
+  created_at?: string;
+  measured_at?: string;
+  message?: string;
+}
+
+export interface LearningStatus {
+  maturity: {
+    stage: string;
+    days_tracked: number;
+    improvements_measured: number;
+    recommendations_available: boolean;
+  } | null;
+  effectiveness: {
+    action_type: string;
+    diagnosis_stage: string;
+    times_applied: number;
+    times_improved: number;
+    times_unchanged: number;
+    times_worsened: number;
+    success_rate: number;
+    avg_roas_change: number;
+  }[];
+  pending_measurements: number;
+}
+
+export interface ReviewRun {
+  id: number;
+  run_date: string;
+  total_campaigns: number;
+  actions_generated: number;
+  actions_approved: number;
+  actions_executed: number;
+  summary_json: string | null;
+  created_at: string;
+}
+
+export interface NotificationConfig {
+  id: number;
+  channel: string;
+  webhook_url: string;
+  enabled: number;
+  created_at: string;
+}
+
+export interface ReviewResult {
+  run_id: number | null;
+  total_campaigns: number;
+  actions_generated: number;
+  actions: ActionQueueItem[];
+  skipped?: boolean;
+  reason?: string;
+}
+
+export interface ExecuteResult {
+  executed: number;
+  failed: number;
+  results: { success: boolean; action_id: number; error?: string }[];
+}
+
+export const fetchPendingActions = () =>
+  api.get<ActionQueueItem[]>("/actions/pending").then((r) => r.data);
+export const fetchAllActions = (status?: string, limit?: number) => {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  if (limit) params.set("limit", String(limit));
+  return api.get<ActionQueueItem[]>(`/actions?${params}`).then((r) => r.data);
+};
+export const fetchReviewRuns = (limit?: number) =>
+  api.get<ReviewRun[]>(`/actions/runs${limit ? `?limit=${limit}` : ""}`).then((r) => r.data);
+export const approveAction = (id: number) =>
+  api.post(`/actions/${id}/approve`).then((r) => r.data);
+export const rejectAction = (id: number) =>
+  api.post(`/actions/${id}/reject`).then((r) => r.data);
+export const approveAllActions = () =>
+  api.post("/actions/approve-all").then((r) => r.data);
+export const executeAction = (id: number) =>
+  api.post(`/actions/${id}/execute`).then((r) => r.data);
+export const completeManualAction = (id: number) =>
+  api.post(`/actions/${id}/complete-manual`).then((r) => r.data);
+export const executeAllActions = () =>
+  api.post<ExecuteResult>("/actions/execute-all").then((r) => r.data);
+export const triggerDailyReview = () =>
+  api.post<ReviewResult>("/actions/run-review").then((r) => r.data);
+export const fetchNotificationConfig = () =>
+  api.get<NotificationConfig[]>("/actions/notification-config").then((r) => r.data);
+export const saveNotificationConfig = (channel: string, webhook_url: string, enabled: boolean = true) =>
+  api.post("/actions/notification-config", { channel, webhook_url, enabled }).then((r) => r.data);
+export const testNotification = (webhook_url: string, channel: string = "openclaw") =>
+  api.post("/actions/notification-test", { webhook_url, channel }).then((r) => r.data);
+export const fetchImprovementResult = (actionId: number) =>
+  api.get<ImprovementResult>(`/actions/${actionId}/improvement`).then((r) => r.data);
+export const fetchLearningStatus = () =>
+  api.get<LearningStatus>("/actions/learning-status").then((r) => r.data);
+
 // ─── Campaign Publish (Meta 캠페인 자동생성) ───
 
 export interface FacebookPage {
@@ -1185,3 +1379,29 @@ export const fetchFacebookPages = () =>
 
 export const publishCampaignToMeta = (data: CampaignPublishRequest) =>
   api.post<PublishResult>("/campaign-publish/publish", data, { timeout: 300000 }).then((r) => r.data); // 5분 (비디오 청크 업로드 포함)
+
+// ─── 학습 기반 추천 설정 ───
+
+export interface RecommendedSetting {
+  value: string | number;
+  confidence: "high" | "medium" | "low";
+  evidence: string;
+}
+
+export interface CampaignRecommendations {
+  recommended_budget: RecommendedSetting | null;
+  recommended_objective: RecommendedSetting | null;
+  recommended_targeting: RecommendedSetting | null;
+  benchmarks: {
+    avg_roas: number;
+    avg_ctr: number;
+    avg_cpc: number;
+    avg_cpa: number;
+  } | null;
+  data_maturity: string;
+  maturity_description: string;
+  success_campaign_count: number;
+}
+
+export const fetchCampaignRecommendations = () =>
+  api.get<CampaignRecommendations>("/campaign-publish/recommendations").then((r) => r.data);

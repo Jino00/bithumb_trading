@@ -527,6 +527,123 @@ export async function createMetaAd(accessToken, adAccountId, params) {
   }
 }
 
+// ─── 캠페인/광고세트 업데이트 (일일 리뷰 자동 실행용) ───
+
+/** 캠페인 상태 변경 (ACTIVE ↔ PAUSED) */
+export async function updateCampaignStatus(accessToken, campaignId, status) {
+  try {
+    const body = new URLSearchParams({
+      status,
+      access_token: accessToken,
+    });
+    const res = await fetch(`${GRAPH_API_BASE}/${campaignId}`, {
+      method: "POST",
+      body,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    return await safeParseMetaResponse(res, "updateCampaignStatus");
+  } catch (err) {
+    console.error("[Meta API] updateCampaignStatus exception:", err.message);
+    return { data: null, error: err.message };
+  }
+}
+
+/** 광고세트의 일 예산 변경 (Meta API 예산은 "센트" 단위: ₩30,000 → 3000000) */
+export async function updateAdSetBudget(accessToken, adsetId, dailyBudgetKrw) {
+  try {
+    const budgetInCents = Math.round(dailyBudgetKrw * 100);
+    const body = new URLSearchParams({
+      daily_budget: String(budgetInCents),
+      access_token: accessToken,
+    });
+    const res = await fetch(`${GRAPH_API_BASE}/${adsetId}`, {
+      method: "POST",
+      body,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    return await safeParseMetaResponse(res, "updateAdSetBudget");
+  } catch (err) {
+    console.error("[Meta API] updateAdSetBudget exception:", err.message);
+    return { data: null, error: err.message };
+  }
+}
+
+/** 캠페인에 속한 광고세트 목록 조회 (예산 변경 + 타겟팅 분석용) */
+export async function fetchAdSetsForCampaign(accessToken, campaignId) {
+  try {
+    const fields = "id,name,daily_budget,status,targeting";
+    const res = await fetch(
+      `${GRAPH_API_BASE}/${campaignId}/adsets?fields=${fields}&access_token=${accessToken}&limit=100`,
+      { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }
+    );
+    if (!res.ok) {
+      const err = await res.json();
+      return { data: null, error: err.error?.message || "Failed to fetch adsets" };
+    }
+    const json = await res.json();
+    return { data: json.data || [], error: null };
+  } catch (err) {
+    return { data: null, error: err.message };
+  }
+}
+
+/** 광고세트 타겟팅 변경 (관심사 타겟 → Broad 전환 등) */
+export async function updateAdSetTargeting(accessToken, adsetId, targeting) {
+  try {
+    const body = new URLSearchParams({
+      targeting: JSON.stringify(targeting),
+      access_token: accessToken,
+    });
+    const res = await fetch(`${GRAPH_API_BASE}/${adsetId}`, {
+      method: "POST",
+      body,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    return await safeParseMetaResponse(res, "updateAdSetTargeting");
+  } catch (err) {
+    console.error("[Meta API] updateAdSetTargeting exception:", err.message);
+    return { data: null, error: err.message };
+  }
+}
+
+/** 개별 광고 상태 변경 (ACTIVE ↔ PAUSED — 캠페인이 아닌 개별 ad 레벨) */
+export async function updateAdStatus(accessToken, adId, status) {
+  try {
+    const body = new URLSearchParams({
+      status,
+      access_token: accessToken,
+    });
+    const res = await fetch(`${GRAPH_API_BASE}/${adId}`, {
+      method: "POST",
+      body,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    return await safeParseMetaResponse(res, "updateAdStatus");
+  } catch (err) {
+    console.error("[Meta API] updateAdStatus exception:", err.message);
+    return { data: null, error: err.message };
+  }
+}
+
+/** 캠페인 내 광고 목록 조회 (개별 광고 성과 비교용) */
+export async function fetchAdsForCampaign(accessToken, campaignId) {
+  try {
+    const fields = "id,name,status,effective_status";
+    const res = await fetch(
+      `${GRAPH_API_BASE}/${campaignId}/ads?fields=${fields}&access_token=${accessToken}&limit=100`,
+      { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }
+    );
+    if (!res.ok) {
+      const err = await res.json();
+      return { data: null, error: err.error?.message || "Failed to fetch ads" };
+    }
+    const json = await res.json();
+    return { data: json.data || [], error: null };
+  } catch (err) {
+    return { data: null, error: err.message };
+  }
+}
+
 // ─── 비디오 업로드 + 비디오 크리에이티브 (대용량 영상 지원) ───
 
 export async function uploadAdVideo(accessToken, adAccountId, videoPath) {

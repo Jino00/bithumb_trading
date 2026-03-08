@@ -14,6 +14,7 @@ import {
   Library,
   ShoppingBag,
   PenTool,
+  ListChecks,
 } from "lucide-react";
 import DashboardSummary from "./components/Dashboard";
 import AdPerformanceTable from "./components/AdPerformanceTable";
@@ -27,6 +28,7 @@ import Settings from "./components/Settings";
 import AdLibraryReviewPage from "./components/AdLibraryReview";
 import ProductReviewAnalysisPage from "./components/ProductReviewAnalysis";
 import AdCopyGeneratorPage from "./components/AdCopyGenerator";
+import ActionQueue from "./components/ActionQueue";
 import {
   Campaign,
   AnalysisResult,
@@ -49,7 +51,7 @@ import {
   fetchMetaAdAccounts,
 } from "./lib/api";
 
-type Page = "dashboard" | "campaigns" | "competitors" | "trends" | "ad-library" | "product-reviews" | "ad-copy" | "settings";
+type Page = "dashboard" | "campaigns" | "competitors" | "trends" | "ad-library" | "product-reviews" | "ad-copy" | "actions" | "settings";
 
 const NAV_ITEMS: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
   { page: "dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -59,6 +61,7 @@ const NAV_ITEMS: { page: Page; label: string; icon: typeof LayoutDashboard }[] =
   { page: "ad-library", label: "Ad Library", icon: Library },
   { page: "product-reviews", label: "Reviews", icon: ShoppingBag },
   { page: "ad-copy", label: "Ad Copy", icon: PenTool },
+  { page: "actions", label: "Actions", icon: ListChecks },
   { page: "settings", label: "Settings", icon: SettingsIcon },
 ];
 
@@ -159,21 +162,37 @@ export default function App() {
     loadCampaigns(dateRange, accountId);
   };
 
-  // OAuth 콜백 URL 파라미터 처리
+  // URL 파라미터 처리 (OAuth 콜백 + 알림 링크)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const targetPage = params.get("page");
+    const targetTab = params.get("tab");
     if (targetPage === "settings") {
       setPage("settings");
+    } else if (targetTab === "actions") {
+      setPage("actions");
+    }
+    if (targetPage || targetTab) {
       window.history.replaceState({}, "", window.location.pathname);
     }
   }, []);
 
   useEffect(() => {
-    loadCampaigns();
-    loadCompetitors();
-    loadTrends();
-    loadBusinesses();
+    const init = async () => {
+      await loadCampaigns();
+      loadCompetitors();
+      loadTrends();
+      loadBusinesses();
+      // 초기 로드 시 판단도 자동 실행
+      try {
+        setJudgingAll(true);
+        const result = await judgeAllCampaigns(dateRange);
+        setJudgments(result.judgments || []);
+        setJudgeSummary(result.summary || null);
+      } catch { /* 판단 실패해도 대시보드는 정상 표시 */ }
+      finally { setJudgingAll(false); }
+    };
+    init();
   }, [loadCampaigns, loadCompetitors, loadTrends, loadBusinesses]);
 
   const handleAnalyzeAll = async () => {
@@ -193,7 +212,7 @@ export default function App() {
   const handleJudgeAll = async () => {
     setJudgingAll(true);
     try {
-      const result = await judgeAllCampaigns();
+      const result = await judgeAllCampaigns(dateRange);
       setJudgments(result.judgments || []);
       setJudgeSummary(result.summary || null);
       setLastUpdated(new Date().toISOString());
@@ -205,9 +224,20 @@ export default function App() {
     }
   };
 
-  const handleDateRangeChange = (period: DatePeriod) => {
+  const handleDateRangeChange = async (period: DatePeriod) => {
     setDateRange(period);
-    loadCampaigns(period);
+    await loadCampaigns(period);
+    // 기간 변경 시 판단 데이터도 해당 기간으로 자동 리프레시
+    try {
+      setJudgingAll(true);
+      const result = await judgeAllCampaigns(period);
+      setJudgments(result.judgments || []);
+      setJudgeSummary(result.summary || null);
+    } catch (err) {
+      console.error("Failed to refresh judgments for period:", err);
+    } finally {
+      setJudgingAll(false);
+    }
   };
 
   const handleRefreshAll = async () => {
@@ -270,6 +300,8 @@ export default function App() {
         return <ProductReviewAnalysisPage />;
       case "ad-copy":
         return <AdCopyGeneratorPage />;
+      case "actions":
+        return <ActionQueue />;
       case "settings":
         return <Settings />;
     }

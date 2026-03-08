@@ -1,8 +1,9 @@
-// node-cron 스케줄러 — 매일 06:00 트렌드 + 07:00 스냅샷 + 08:00 Cafe24 동기화
+// node-cron 스케줄러 — 매일 06:00 트렌드 + 07:00 스냅샷 + 08:00 Cafe24 동기화 + 09:00 일일 리뷰
 import cron from "node-cron";
 import { refreshTrendsData, getLastRefreshTime } from "./services/trend-refresh.js";
 import { takeSnapshotAll } from "./services/snapshot-service.js";
 import { syncCafe24OrdersJob } from "./services/cafe24-sync-job.js";
+import { runDailyReview } from "./services/daily-review.js";
 
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 
@@ -47,7 +48,22 @@ export function startScheduler() {
     }
   }, { timezone: "Asia/Seoul" });
 
-  console.log("[Scheduler] Daily tasks: trends@06:00, snapshots@07:00, cafe24-sync@08:00 KST");
+  // 매일 09:00 KST — 일일 캠페인 리뷰 + 자동 액션 생성
+  cron.schedule("0 9 * * *", async () => {
+    console.log("[Scheduler] Running daily campaign review...");
+    try {
+      const result = await runDailyReview();
+      if (result.skipped) {
+        console.log(`[Scheduler] Daily review skipped: ${result.reason}`);
+      } else {
+        console.log(`[Scheduler] Daily review: ${result.total_campaigns} campaigns → ${result.actions_generated} actions (run #${result.run_id})`);
+      }
+    } catch (err) {
+      console.error("[Scheduler] Daily review failed:", err.message);
+    }
+  }, { timezone: "Asia/Seoul" });
+
+  console.log("[Scheduler] Daily tasks: trends@06:00, snapshots@07:00, cafe24-sync@08:00, daily-review@09:00 KST");
 
   // 시작 시 마지막 갱신 확인 → 24시간 이상 지났으면 즉시 갱신
   checkAndRefreshOnStartup();

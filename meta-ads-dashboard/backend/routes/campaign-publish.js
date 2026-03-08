@@ -1,9 +1,11 @@
 // 캠페인 퍼블리시 라우트 — AI 카피를 Meta 광고로 자동 생성 (이미지 + 비디오 지원)
+// ※ 학습 반영 (v2): 성공 캠페인 패턴에서 추천 설정을 도출하여 신규 광고 생성 시 제안
 import { Router } from "express";
 import fs from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { getDb } from "../db/database.js";
+import { getBenchmarks, assessDataMaturity } from "../services/trend-intelligence.js";
 import {
   fetchPages,
   createMetaCampaign,
@@ -299,6 +301,100 @@ router.post("/publish", async (req, res) => {
   } catch (err) {
     console.error("Campaign publish error:", err);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── GET /recommendations — 학습 기반 신규 캠페인 추천 설정 ───
+
+router.get("/recommendations", (_req, res) => {
+  try {
+    const db = getDb();
+    const maturity = assessDataMaturity(db);
+
+    // 벤치마크 로드
+    let benchmarks = null;
+    try {
+      const bData = getBenchmarks("30d");
+      if (bData && Object.keys(bData.metrics).length > 0) {
+        benchmarks = bData.metrics;
+      }
+    } catch { /* 벤치마크 없으면 건너뛰기 */ }
+
+    // 성공 캠페인 분석 (ROAS ≥ p75 또는 ≥ 2.0x)
+    const roasThreshold = benchmarks?.roas?.p75 || 2.0;
+    const successCampaigns = db.prepare(`
+      SELECT pc.*, cs.roas, cs.ctr, cs.cpc, cs.frequency, cs.cpa
+      FROM published_campaigns pc
+      JOIN campaigns c ON c.meta_campaign_id = pc.meta_campaign_id
+      JOIN campaign_snapshots cs ON cs.campaign_id = c.id
+      WHERE cs.roas >= ? AND pc.publish_error IS NULL
+      ORDER BY cs.roas DESC
+    `).all(roasThreshold);
+
+    // 추천 예산: 성공 캠페인의 예산 중앙값
+    const budgets = successCampaigns
+      .map((c) => c.daily_budget)
+      .filter((b) => b && b > 0)
+      .sort((a, b) => a - b);
+    const medianBudget = budgets.length > 0
+      ? budgets[Math.floor(budgets.length / 2)]
+      : null;
+
+    // 추천 목표: 성공 캠페인의 최빈 objective
+    const objCounts = {};
+    for (const c of successCampaigns) {
+      if (c.objective) objCounts[c.objective] = (objCounts[c.objective] || 0) + 1;
+    }
+    const topObjective = Object.entries(objCounts).sort(([, a], [, b]) => b - a)[0];
+
+    // 타겟팅 추천: action_effectiveness에서 targeting_broaden 성공률 확인
+    let targetingRec = null;
+    try {
+      const broadEffect = db.prepare(
+        "SELECT success_rate, times_applied, avg_ctr_change FROM action_effectiveness WHERE action_type = 'targeting_broaden'"
+      ).get();
+      if (broadEffect && broadEffect.times_applied >= 2 && broadEffect.success_rate > 50) {
+        targetingRec = {
+          value: "broad",
+          confidence: broadEffect.success_rate >= 70 ? "high" : "medium",
+          evidence: `Broad 타겟 전환 성공률 ${Math.round(broadEffect.success_rate)}% (${broadEffect.times_applied}건)`,
+        };
+      }
+    } catch { /* 없으면 건너뛰기 */ }
+
+    // CTA 추천: 성공 캠페인의 CTA 분포 분석은 published_campaigns에 cta 저장 안 됨
+    // → 대신 벤치마크 기반 일반 추천
+    const recommendations = {
+      recommended_budget: medianBudget ? {
+        value: medianBudget,
+        confidence: budgets.length >= 5 ? "high" : budgets.length >= 2 ? "medium" : "low",
+        evidence: `ROAS ≥${roasThreshold.toFixed(1)}x 캠페인 ${budgets.length}건의 중앙값`,
+      } : null,
+
+      recommended_objective: topObjective ? {
+        value: topObjective[0],
+        confidence: topObjective[1] >= 3 ? "high" : "medium",
+        evidence: `성공 캠페인의 ${Math.round((topObjective[1] / successCampaigns.length) * 100)}%가 사용`,
+      } : null,
+
+      recommended_targeting: targetingRec,
+
+      benchmarks: benchmarks ? {
+        avg_roas: benchmarks.roas?.avg || 0,
+        avg_ctr: benchmarks.ctr?.avg || 0,
+        avg_cpc: benchmarks.cpc?.avg || 0,
+        avg_cpa: benchmarks.cpa?.avg || 0,
+      } : null,
+
+      data_maturity: maturity.level,
+      maturity_description: maturity.description,
+      success_campaign_count: successCampaigns.length,
+    };
+
+    res.json(recommendations);
+  } catch (err) {
+    console.error("[Recommendations] Error:", err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 

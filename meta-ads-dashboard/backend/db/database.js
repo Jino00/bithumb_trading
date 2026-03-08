@@ -339,6 +339,72 @@ function initTables() {
   // campaign_snapshots에 클릭 수 추가 (퍼널 전환율 계산에 필요)
   addColumnIfNotExists("campaign_snapshots", "clicks", "INTEGER DEFAULT 0");
 
+  // ─── 제품 원가 테이블 (캠페인별 수익성 계산용) ───
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS product_costs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id INTEGER,
+      meta_campaign_id TEXT,
+      campaign_name TEXT NOT NULL,
+      product_name TEXT NOT NULL,
+      cost_price REAL NOT NULL,
+      selling_price REAL DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(campaign_name)
+    );
+  `);
+
+  // ─── 일일 리뷰 + 액션 큐 (자동 캠페인 리뷰 → 승인 → 실행) ───
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS review_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_date TEXT NOT NULL,
+      total_campaigns INTEGER DEFAULT 0,
+      actions_generated INTEGER DEFAULT 0,
+      actions_approved INTEGER DEFAULT 0,
+      actions_executed INTEGER DEFAULT 0,
+      summary_json TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS action_queue (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      review_run_id INTEGER,
+      campaign_name TEXT NOT NULL,
+      meta_campaign_id TEXT NOT NULL,
+      action_type TEXT NOT NULL,
+      current_value TEXT,
+      proposed_value TEXT,
+      reason TEXT NOT NULL,
+      verdict TEXT,
+      score INTEGER,
+      status TEXT DEFAULT 'pending',
+      created_at TEXT DEFAULT (datetime('now')),
+      acted_at TEXT,
+      executed_at TEXT,
+      execution_result TEXT,
+      FOREIGN KEY (review_run_id) REFERENCES review_runs(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS notification_config (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      channel TEXT NOT NULL,
+      webhook_url TEXT NOT NULL,
+      enabled INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+
+  // ─── action_queue 진단 데이터 컬럼 (campaign-judge.js 결과 저장) ───
+  addColumnIfNotExists("action_queue", "recommendations_json", "TEXT");
+  addColumnIfNotExists("action_queue", "funnel_diagnosis_json", "TEXT");
+  addColumnIfNotExists("action_queue", "smart_recommendations_json", "TEXT");
+  addColumnIfNotExists("action_queue", "benchmark_comparison_json", "TEXT");
+  addColumnIfNotExists("action_queue", "profitability_json", "TEXT");
+  addColumnIfNotExists("action_queue", "adset_id", "TEXT");
+  addColumnIfNotExists("action_queue", "improvement_log_id", "INTEGER");
+
   // ─── 트렌드 인텔리전스: 동적 벤치마크 + 메트릭별 트렌드 ───
   db.exec(`
     CREATE TABLE IF NOT EXISTS metric_benchmarks (

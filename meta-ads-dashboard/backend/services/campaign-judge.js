@@ -2,33 +2,62 @@
 // Meta purchase_roas(Cafe24 Pixel) + 자사몰 퍼널 데이터(landing→view→cart→checkout→purchase)를
 // 조합하여 어디서 문제가 발생하는지 정확히 진단하고, 구체적 개선 액션을 제안한다.
 // 트렌드 인텔리전스의 동적 벤치마크 + 학습 데이터를 결합하여 데이터 기반 추천을 제공한다.
+// ※ 학습 반영 (v2): blendThreshold()로 하드코딩 기준 → 동적 벤치마크 기준 점진적 전환
 import { getBenchmarks, getSmartRecommendations } from "./trend-intelligence.js";
+import { calcCampaignProfitability, calcProfitabilitySummary, roundN } from "./biz-metrics.js";
+
+// ─── 학습 기반 동적 기준 유틸 ───
+
+/**
+ * 하드코딩 기준과 학습된 벤치마크 기준을 데이터 성숙도에 따라 혼합
+ * 데이터가 부족한 초기에는 하드코딩 100%, 데이터가 쌓일수록 학습 기준 비율 증가
+ *
+ * @param {number} hardcoded — 기존 고정값 (예: 2000)
+ * @param {number|null|undefined} learned — 벤치마크에서 가져온 값 (예: benchmarks.cpc.p75)
+ * @param {number} sampleCount — 벤치마크 산출에 사용된 데이터 수
+ * @param {number} minSamples — 학습 기준을 100% 신뢰하기 위한 최소 샘플 수 (기본: 30)
+ * @returns {number} 혼합된 기준값
+ */
+export function blendThreshold(hardcoded, learned, sampleCount, minSamples = 30) {
+  if (learned == null || !isFinite(learned) || sampleCount < 7) return hardcoded;
+  const weight = Math.min(sampleCount / minSamples, 1.0);
+  return hardcoded * (1 - weight) + learned * weight;
+}
 
 /**
  * 단일 캠페인 판정 — 개별 지표 채점 + 복합 퍼널 진단
  * @param {object} campaign - { roas, ctr, cpc, frequency, cpa, aov, revenue, total_spend,
  *   purchase_count, clicks, landing_page_views, content_views, add_to_cart_count, initiate_checkout_count }
+ * @param {object|null} benchmarks - getBenchmarks() 반환값의 metrics 객체 (학습 기반 동적 기준)
  * @returns {{ verdict, severity, reasons[], recommendations[], score, funnel_diagnosis }}
  */
-export function judgeCampaign(campaign) {
+export function judgeCampaign(campaign, benchmarks = null) {
   const {
     roas = 0, ctr = 0, cpc = 0, frequency = 0, cpa = 0,
     total_spend = 0, purchase_count = 0,
+    cost_price = 0, revenue = 0, aov = 0,
   } = campaign;
   const reasons = [];
   const recommendations = [];
   let score = 50;
 
-  // ─── 1단계: 개별 지표 채점 (기존 로직) ───
-  score = scoreRoas(roas, total_spend, score, reasons, recommendations);
-  score = scoreCtr(ctr, score, reasons, recommendations);
-  score = scoreCpc(cpc, score, reasons, recommendations);
-  score = scoreFrequency(frequency, score, reasons, recommendations);
-  score = scoreCpa(cpa, score, reasons, recommendations);
+  // ─── 1단계: 개별 지표 채점 (벤치마크 기반 동적 기준) ───
+  score = scoreRoas(roas, total_spend, score, reasons, recommendations, benchmarks);
+  score = scoreCtr(ctr, score, reasons, recommendations, benchmarks);
+  score = scoreCpc(cpc, score, reasons, recommendations, benchmarks);
+  score = scoreFrequency(frequency, score, reasons, recommendations, benchmarks);
+  score = scoreCpa(cpa, score, reasons, recommendations, benchmarks);
   score = scoreNoPurchase(purchase_count, total_spend, score, reasons, recommendations);
 
-  // ─── 2단계: 복합 퍼널 진단 (Cafe24 자사몰 행동 분석) ───
-  const funnelDiagnosis = diagnoseFunnel(campaign);
+  // ─── 1.5단계: 원가 기반 수익성 진단 ───
+  const profitability = scoreProfitability(
+    { cost_price, revenue, total_spend, purchase_count, aov, roas },
+    score, reasons, recommendations
+  );
+  score = profitability.score;
+
+  // ─── 2단계: 복합 퍼널 진단 (Cafe24 자사몰 행동 분석, 벤치마크 기반) ───
+  const funnelDiagnosis = diagnoseFunnel(campaign, benchmarks);
 
   // 퍼널 진단 결과를 reasons/recommendations에 병합
   for (const diag of funnelDiagnosis) {
@@ -54,7 +83,54 @@ export function judgeCampaign(campaign) {
     reasons,
     recommendations: recommendations.length > 0 ? recommendations : ["현행 유지"],
     funnel_diagnosis: funnelDiagnosis,
+    profitability: profitability.data,
   };
+}
+
+// ─── 원가 기반 수익성 채점 (계산은 biz-metrics.js SSOT 사용) ───
+function scoreProfitability({ cost_price, revenue, total_spend, purchase_count, aov, roas }, score, reasons, recommendations) {
+  const p = calcCampaignProfitability({
+    costPrice: cost_price,
+    purchases: purchase_count || 0,
+    revenue,
+    adSpend: total_spend,
+    aov,
+  });
+
+  // snake_case 변환 (기존 API 호환)
+  const data = {
+    cost_price: cost_price || 0,
+    cogs: p.cogs,
+    gross_profit: p.grossProfit,
+    net_profit: p.netProfit,
+    gross_margin: p.grossMargin,
+    net_margin: p.netMargin,
+    true_roi: p.trueRoi,
+    break_even_roas: p.breakEvenRoas,
+  };
+
+  if (!p.hasCostData) {
+    return { score, data };
+  }
+
+  // 순이익 기반 채점 (채점/추천 로직은 judge 전용)
+  if (p.netProfit > 0) {
+    if (p.trueRoi >= 50) {
+      score += 10;
+      reasons.push(`💰 순이익 +₩${Math.round(p.netProfit).toLocaleString()} (ROI ${p.trueRoi}%) — 수익성 우수`);
+    } else {
+      score += 5;
+      reasons.push(`💰 순이익 +₩${Math.round(p.netProfit).toLocaleString()} (ROI ${p.trueRoi}%) — 흑자이나 마진 개선 필요`);
+      recommendations.push(`AOV(₩${Math.round(aov).toLocaleString()}) 올리기: 세트 상품, 업셀 제안으로 객단가 향상`);
+    }
+  } else if ((purchase_count || 0) > 0) {
+    score -= 10;
+    reasons.push(`🔴 원가+광고비 반영 순손실 ₩${Math.round(Math.abs(p.netProfit)).toLocaleString()} — ROAS ${roas.toFixed(2)}x이지만 실제로는 적자`);
+    recommendations.push(`손익분기 ROAS ${p.breakEvenRoas}x 이상 필요 — CPA 낮추거나 AOV 올려야 함`);
+    recommendations.push(`원가 ₩${cost_price.toLocaleString()} 대비 CPA ₩${Math.round(total_spend / purchase_count).toLocaleString()} 검토`);
+  }
+
+  return { score, data };
 }
 
 // ─── 퍼널 복합진단: 지표 조합으로 병목 지점 + 원인 식별 ───
@@ -66,7 +142,7 @@ export function judgeCampaign(campaign) {
  * @param {object} campaign
  * @returns {Array<{ stage, diagnosis, severity, evidence, actions[], funnel_rates }>}
  */
-function diagnoseFunnel(campaign) {
+function diagnoseFunnel(campaign, benchmarks = null) {
   const {
     clicks = 0, ctr = 0, cpc = 0, roas = 0, frequency = 0, cpa = 0,
     landing_page_views = 0, content_views = 0,
@@ -79,6 +155,12 @@ function diagnoseFunnel(campaign) {
   // 퍼널 전환율 계산
   const rates = computeFunnelRates(clicks, landing_page_views, content_views,
     add_to_cart_count, initiate_checkout_count, purchase_count);
+
+  // 동적 기준: 벤치마크 데이터가 있으면 p25/p75 사용, 없으면 하드코딩 fallback
+  const sc = benchmarks?.ctr?.sample_count || 0;
+  const ctrLowThreshold = blendThreshold(1, benchmarks?.ctr?.p25, sc);
+  const cpcHighThreshold = blendThreshold(2000, benchmarks?.cpc?.p75, sc);
+  const freqHighThreshold = blendThreshold(3, benchmarks?.frequency?.p75, sc);
 
   // 데이터 부족 시 퍼널 진단 건너뛰기 (클릭이 너무 적으면 통계적으로 무의미)
   if (clicks < 10) {
@@ -93,28 +175,28 @@ function diagnoseFunnel(campaign) {
   }
 
   // ─── 패턴 1: 광고 소재 문제 (CTR 낮음) ───
-  if (ctr < 1) {
+  if (ctr < ctrLowThreshold) {
     diagnoses.push({
       stage: "광고 소재",
       diagnosis: `CTR ${ctr.toFixed(2)}% — 광고가 타겟에게 매력적이지 않음`,
       severity: "critical",
-      evidence: `CTR ${ctr.toFixed(2)}% (기준: 1%+), CPC ₩${Math.round(cpc).toLocaleString()}`,
+      evidence: `CTR ${ctr.toFixed(2)}% (기준: ${roundN(ctrLowThreshold)}%+), CPC ₩${Math.round(cpc).toLocaleString()}`,
       actions: [
         "광고 크리에이티브 전면 교체 (훅/첫 3초 임팩트 강화)",
         "타겟 오디언스와 소재 메시지 일치도 점검",
-        cpc > 2000 ? "CPC 과다 — 타겟 범위 확대로 경쟁 완화" : null,
+        cpc > cpcHighThreshold ? `CPC 과다 (₩${Math.round(cpc).toLocaleString()} > 기준 ₩${Math.round(cpcHighThreshold).toLocaleString()}) — 타겟 범위 확대로 경쟁 완화` : null,
       ].filter(Boolean),
       funnel_rates: rates,
     });
   }
 
   // ─── 패턴 2: 타겟팅 문제 (CPC 높고 CTR도 낮음) ───
-  if (cpc > 2000 && ctr < 1.5) {
+  if (cpc > cpcHighThreshold && ctr < 1.5) {
     diagnoses.push({
       stage: "타겟팅",
       diagnosis: `CPC ₩${Math.round(cpc).toLocaleString()} + CTR ${ctr.toFixed(2)}% — 타겟 불일치`,
       severity: "warning",
-      evidence: `비싼 클릭비용인데 반응도 저조 = 잘못된 오디언스에 노출 중`,
+      evidence: `비싼 클릭비용(기준: ₩${Math.round(cpcHighThreshold).toLocaleString()})인데 반응도 저조 = 잘못된 오디언스에 노출 중`,
       actions: [
         "타겟 오디언스 재설계 (관심사/행동 기반 세분화)",
         "Lookalike 오디언스 소스 변경 (구매자 기반 → 장바구니 기반)",
@@ -125,12 +207,12 @@ function diagnoseFunnel(campaign) {
   }
 
   // ─── 패턴 3: 광고 피로감 (Frequency 높음 + CTR 하락 의심) ───
-  if (frequency > 3 && ctr < 2) {
+  if (frequency > freqHighThreshold && ctr < 2) {
     diagnoses.push({
       stage: "광고 피로",
       diagnosis: `Frequency ${frequency.toFixed(1)} + CTR ${ctr.toFixed(2)}% — 같은 유저에게 반복 노출`,
       severity: frequency > 5 ? "critical" : "warning",
-      evidence: `동일 유저 평균 ${frequency.toFixed(1)}회 노출 → 소재 피로감 → CTR 하락`,
+      evidence: `동일 유저 평균 ${frequency.toFixed(1)}회 노출(기준: ${roundN(freqHighThreshold)}회) → 소재 피로감 → CTR 하락`,
       actions: [
         "크리에이티브 즉시 교체 (새 이미지/영상 + 카피)",
         "오디언스 확장으로 새로운 유저 풀 확보",
@@ -375,20 +457,27 @@ function computeFunnelRates(clicks, landingViews, contentViews, addToCart, initi
 
 // ─── 개별 지표 채점 함수 (기존 로직 분리) ───
 
-function scoreRoas(roas, totalSpend, score, reasons, recommendations) {
-  if (roas >= 3) {
+function scoreRoas(roas, totalSpend, score, reasons, recommendations, benchmarks = null) {
+  const sc = benchmarks?.roas?.sample_count || 0;
+  // 동적 기준: 벤치마크 p90/p75/median/p25 → 하드코딩 3.0/2.0/1.0/0.5 대체
+  const excellent = blendThreshold(3.0, benchmarks?.roas?.p90, sc);
+  const good = blendThreshold(2.0, benchmarks?.roas?.p75, sc);
+  const breakEven = blendThreshold(1.0, benchmarks?.roas?.median, sc);
+  const danger = blendThreshold(0.5, benchmarks?.roas?.p25, sc);
+
+  if (roas >= excellent) {
     score += 30;
-    reasons.push(`ROAS ${roas.toFixed(2)}x — 우수 (업계 상위 성과)`);
+    reasons.push(`ROAS ${roas.toFixed(2)}x — 우수 (기준: ${roundN(excellent)}x+)`);
     recommendations.push("예산 20~30% 증액 검토 (스케일링 단계)");
-  } else if (roas >= 2) {
+  } else if (roas >= good) {
     score += 20;
-    reasons.push(`ROAS ${roas.toFixed(2)}x — 양호 (수익 구간)`);
+    reasons.push(`ROAS ${roas.toFixed(2)}x — 양호 (기준: ${roundN(good)}x+)`);
     recommendations.push("현행 유지 + 크리에이티브 테스트로 점진적 개선");
-  } else if (roas >= 1) {
+  } else if (roas >= breakEven) {
     score += 5;
-    reasons.push(`ROAS ${roas.toFixed(2)}x — 손익분기 (수익 미미)`);
+    reasons.push(`ROAS ${roas.toFixed(2)}x — 손익분기 (기준: ${roundN(breakEven)}x+)`);
     recommendations.push("AOV 올리기 (묶음 상품, 업셀) 또는 CPA 낮추기 (타겟 최적화)");
-  } else if (roas > 0 && roas < 1) {
+  } else if (roas > 0 && roas < breakEven) {
     score -= 20;
     reasons.push(`ROAS ${roas.toFixed(2)}x — 적자 (광고비 > 매출)`);
     recommendations.push("크리에이티브 전면 교체 + 타겟 오디언스 재검토 필요");
@@ -398,7 +487,7 @@ function scoreRoas(roas, totalSpend, score, reasons, recommendations) {
     recommendations.push("Pixel 설치/이벤트 발화 확인, 전환이 0이면 즉시 정지 검토");
   }
 
-  if (roas < 0.5 && totalSpend > 50000) {
+  if (roas < danger && totalSpend > 50000) {
     score -= 15;
     reasons.push(`지출 ₩${Math.round(totalSpend).toLocaleString()} 대비 ROAS ${roas.toFixed(2)}x — 즉시 정지 권장`);
     recommendations.push("캠페인 일시정지 후 크리에이티브/타겟 전면 재설계");
@@ -407,52 +496,72 @@ function scoreRoas(roas, totalSpend, score, reasons, recommendations) {
   return score;
 }
 
-function scoreCtr(ctr, score, reasons, recommendations) {
-  if (ctr >= 3) {
+function scoreCtr(ctr, score, reasons, recommendations, benchmarks = null) {
+  const sc = benchmarks?.ctr?.sample_count || 0;
+  const excellent = blendThreshold(3.0, benchmarks?.ctr?.p90, sc);
+  const good = blendThreshold(1.5, benchmarks?.ctr?.p75, sc);
+  const low = blendThreshold(1.0, benchmarks?.ctr?.p25, sc);
+
+  if (ctr >= excellent) {
     score += 10;
-    reasons.push(`CTR ${ctr.toFixed(2)}% — 우수 (광고 소재 매력적)`);
-  } else if (ctr >= 1.5) {
+    reasons.push(`CTR ${ctr.toFixed(2)}% — 우수 (기준: ${roundN(excellent)}%+)`);
+  } else if (ctr >= good) {
     score += 5;
-    reasons.push(`CTR ${ctr.toFixed(2)}% — 양호`);
-  } else if (ctr > 0 && ctr < 1) {
+    reasons.push(`CTR ${ctr.toFixed(2)}% — 양호 (기준: ${roundN(good)}%+)`);
+  } else if (ctr > 0 && ctr < low) {
     score -= 10;
-    reasons.push(`CTR ${ctr.toFixed(2)}% — 낮음 (소재 매력도 부족)`);
+    reasons.push(`CTR ${ctr.toFixed(2)}% — 낮음 (기준: ${roundN(low)}% 미만)`);
     recommendations.push("광고 크리에이티브 교체: 훅(Hook) 강화, 첫 3초 임팩트 개선");
   }
   return score;
 }
 
-function scoreCpc(cpc, score, reasons, recommendations) {
-  if (cpc > 0 && cpc <= 700) {
+function scoreCpc(cpc, score, reasons, recommendations, benchmarks = null) {
+  const sc = benchmarks?.cpc?.sample_count || 0;
+  // CPC는 낮을수록 좋으므로 p25가 '우수' 기준, p75가 '높음' 기준
+  const excellent = blendThreshold(700, benchmarks?.cpc?.p25, sc);
+  const high = blendThreshold(2000, benchmarks?.cpc?.p75, sc);
+
+  if (cpc > 0 && cpc <= excellent) {
     score += 8;
-    reasons.push(`CPC ₩${Math.round(cpc).toLocaleString()} — 우수`);
-  } else if (cpc > 2000) {
+    reasons.push(`CPC ₩${Math.round(cpc).toLocaleString()} — 우수 (기준: ₩${Math.round(excellent).toLocaleString()} 이하)`);
+  } else if (cpc > high) {
     score -= 8;
-    reasons.push(`CPC ₩${Math.round(cpc).toLocaleString()} — 높음`);
+    reasons.push(`CPC ₩${Math.round(cpc).toLocaleString()} — 높음 (기준: ₩${Math.round(high).toLocaleString()} 초과)`);
     recommendations.push("광고 관련성 점수 개선 또는 타겟 확대로 CPC 낮추기");
   }
   return score;
 }
 
-function scoreFrequency(frequency, score, reasons, recommendations) {
-  if (frequency > 3) {
+function scoreFrequency(frequency, score, reasons, recommendations, benchmarks = null) {
+  const sc = benchmarks?.frequency?.sample_count || 0;
+  // Frequency는 낮을수록 좋으므로 p75가 '위험' 기준, median이 '양호' 기준
+  const fatigueThreshold = blendThreshold(3.0, benchmarks?.frequency?.p75, sc);
+  const optimalThreshold = blendThreshold(2.0, benchmarks?.frequency?.median, sc);
+
+  if (frequency > fatigueThreshold) {
     score -= 10;
-    reasons.push(`Frequency ${frequency.toFixed(1)} — Ad Fatigue 위험`);
+    reasons.push(`Frequency ${frequency.toFixed(1)} — Ad Fatigue 위험 (기준: ${roundN(fatigueThreshold)}+)`);
     recommendations.push("크리에이티브 교체 또는 오디언스 확장 필요 (같은 유저에게 너무 자주 노출)");
-  } else if (frequency <= 2) {
+  } else if (frequency <= optimalThreshold) {
     score += 5;
-    reasons.push(`Frequency ${frequency.toFixed(1)} — 최적 (신선도 유지)`);
+    reasons.push(`Frequency ${frequency.toFixed(1)} — 최적 (기준: ${roundN(optimalThreshold)} 이하)`);
   }
   return score;
 }
 
-function scoreCpa(cpa, score, reasons, recommendations) {
-  if (cpa > 0 && cpa <= 15000) {
+function scoreCpa(cpa, score, reasons, recommendations, benchmarks = null) {
+  const sc = benchmarks?.cpa?.sample_count || 0;
+  // CPA는 낮을수록 좋으므로 p25가 '우수' 기준, p75가 '높음' 기준
+  const excellent = blendThreshold(15000, benchmarks?.cpa?.p25, sc);
+  const high = blendThreshold(40000, benchmarks?.cpa?.p75, sc);
+
+  if (cpa > 0 && cpa <= excellent) {
     score += 8;
-    reasons.push(`CPA ₩${Math.round(cpa).toLocaleString()} — 우수`);
-  } else if (cpa > 40000) {
+    reasons.push(`CPA ₩${Math.round(cpa).toLocaleString()} — 우수 (기준: ₩${Math.round(excellent).toLocaleString()} 이하)`);
+  } else if (cpa > high) {
     score -= 10;
-    reasons.push(`CPA ₩${Math.round(cpa).toLocaleString()} — 높음 (구매당 비용 과다)`);
+    reasons.push(`CPA ₩${Math.round(cpa).toLocaleString()} — 높음 (기준: ₩${Math.round(high).toLocaleString()} 초과)`);
     recommendations.push("전환 최적화 타겟으로 변경 또는 랜딩 페이지 개선");
   }
   return score;
@@ -487,21 +596,25 @@ function getVerdict(score, roas) {
 /**
  * 여러 캠페인 일괄 판정 + 전체 요약 + 퍼널 진단
  * @param {object[]} campaigns
+ * @param {string} period — 벤치마크 기간 ("1d"|"7d"|"15d"|"30d")
  * @returns {{ judgments: object[], summary: object }}
  */
-export function judgeAllCampaigns(campaigns) {
-  // ─── 동적 벤치마크 로드 (데이터 없으면 null) ───
+export function judgeAllCampaigns(campaigns, period = "30d") {
+  // ─── 동적 벤치마크 로드 (선택된 기간 기준) ───
   let benchmarkData = null;
   try {
-    benchmarkData = getBenchmarks("30d");
+    benchmarkData = getBenchmarks(period);
     if (Object.keys(benchmarkData.metrics).length === 0) benchmarkData = null;
   } catch { /* 벤치마크 데이터 아직 없으면 건너뛰기 */ }
+
+  // 벤치마크 메트릭을 판정 함수에 전달하여 동적 기준 적용
+  const bm = benchmarkData?.metrics || null;
 
   const judgments = campaigns.map((c) => {
     const judgment = {
       campaign_id: c.id || c.meta_campaign_id,
       campaign_name: c.name,
-      ...judgeCampaign(c),
+      ...judgeCampaign(c, bm),
       metrics: {
         roas: c.roas || 0,
         ctr: c.ctr || 0,
@@ -541,11 +654,19 @@ export function judgeAllCampaigns(campaigns) {
     return judgment;
   });
 
-  // 전체 요약 통계
-  const totalSpend = campaigns.reduce((s, c) => s + (c.total_spend || 0), 0);
-  const totalRevenue = campaigns.reduce((s, c) => s + (c.revenue || 0), 0);
+  // 전체 요약 통계 — 수익성은 biz-metrics.js SSOT 사용
+  const profitItems = judgments.map((j) => ({
+    revenue: j.metrics.revenue,
+    adSpend: j.metrics.spend,
+    cogs: j.profitability?.cogs || 0,
+    isProfitable: j.profitability?.net_profit > 0,
+  }));
+  const profitSummary = calcProfitabilitySummary(profitItems);
+
+  const totalSpend = profitSummary.totalAdSpend;
+  const totalRevenue = profitSummary.totalRevenue;
   const totalPurchases = campaigns.reduce((s, c) => s + (c.purchase_count || 0), 0);
-  const overallRoas = totalSpend > 0 ? parseFloat((totalRevenue / totalSpend).toFixed(2)) : 0;
+  const overallRoas = totalSpend > 0 ? roundN(totalRevenue / totalSpend, 2) : 0;
 
   // 전체 퍼널 집계
   const totalClicks = campaigns.reduce((s, c) => s + (c.clicks || 0), 0);
@@ -576,8 +697,11 @@ export function judgeAllCampaigns(campaigns) {
     total_revenue: totalRevenue,
     total_purchases: totalPurchases,
     overall_roas: overallRoas,
-    profit_loss: totalRevenue - totalSpend,
-    is_profitable: totalRevenue >= totalSpend,
+    total_cogs: profitSummary.totalCogs,
+    total_net_profit: profitSummary.totalNetProfit,
+    profit_loss: profitSummary.totalNetProfit,
+    is_profitable: profitSummary.isProfitable,
+    profitable_count: profitSummary.profitableCount,
     avg_cpa: totalPurchases > 0 ? Math.round(totalSpend / totalPurchases) : 0,
     avg_aov: totalPurchases > 0 ? Math.round(totalRevenue / totalPurchases) : 0,
     verdict_distribution: verdictCounts,
@@ -652,10 +776,10 @@ function computeBenchmarkComparison(campaign, benchmarkData) {
     }
 
     comparison[name] = {
-      value: round2(value),
-      avg: round2(bench.avg),
-      median: round2(bench.median),
-      p75: round2(bench.p75),
+      value: roundN(value),
+      avg: roundN(bench.avg),
+      median: roundN(bench.median),
+      p75: roundN(bench.p75),
       position,
       vs_avg_pct: bench.avg > 0 ? Math.round(((value - bench.avg) / bench.avg) * 100) : 0,
     };
@@ -673,10 +797,10 @@ function formatBenchmarkSummary(benchmarkData) {
     const b = m[metric];
     if (!b) return null;
     return {
-      avg: round2(b.avg),
-      median: round2(b.median),
-      p75: round2(b.p75),
-      p90: round2(b.p90),
+      avg: roundN(b.avg),
+      median: roundN(b.median),
+      p75: roundN(b.p75),
+      p90: roundN(b.p90),
       sample_count: b.sample_count,
       suffix,
     };
@@ -692,6 +816,4 @@ function formatBenchmarkSummary(benchmarkData) {
   };
 }
 
-function round2(n) {
-  return Math.round(n * 100) / 100;
-}
+// round2 삭제됨 — biz-metrics.js의 roundN() 사용

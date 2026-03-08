@@ -19,6 +19,7 @@ import {
   MetaStatus,
   MetaAdAccount,
   MetaSyncResult,
+  NotificationConfig,
   fetchMetaConfig,
   saveMetaConfig,
   fetchMetaAuthUrl,
@@ -36,6 +37,9 @@ import {
   fetchCafe24Status,
   disconnectCafe24,
   syncCafe24Orders,
+  fetchNotificationConfig,
+  saveNotificationConfig,
+  testNotification,
 } from "../lib/api";
 
 export default function Settings() {
@@ -70,6 +74,14 @@ export default function Settings() {
   const [disconnectingCafe24, setDisconnectingCafe24] = useState(false);
   const [syncingCafe24, setSyncingCafe24] = useState(false);
 
+  // ─── 알림 설정 상태 ───
+  const [notifConfigs, setNotifConfigs] = useState<NotificationConfig[]>([]);
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [notifChannel, setNotifChannel] = useState("openclaw");
+  const [savingNotif, setSavingNotif] = useState(false);
+  const [testingNotif, setTestingNotif] = useState(false);
+  const [notifMessage, setNotifMessage] = useState<string | null>(null);
+
   const loadStatus = useCallback(async () => {
     try {
       const [cfg, sts] = await Promise.all([fetchMetaConfig(), fetchMetaStatus()]);
@@ -90,10 +102,25 @@ export default function Settings() {
     }
   }, []);
 
+  const loadNotificationConfig = useCallback(async () => {
+    try {
+      const configs = await fetchNotificationConfig();
+      setNotifConfigs(configs);
+      // 첫 번째 설정이 있으면 폼에 반영
+      if (configs.length > 0) {
+        setWebhookUrl(configs[0].webhook_url);
+        setNotifChannel(configs[0].channel);
+      }
+    } catch {
+      // 무시
+    }
+  }, []);
+
   useEffect(() => {
     loadStatus();
     loadCafe24Status();
-  }, [loadStatus, loadCafe24Status]);
+    loadNotificationConfig();
+  }, [loadStatus, loadCafe24Status, loadNotificationConfig]);
 
   // ─── Meta 핸들러 ───
 
@@ -616,6 +643,104 @@ export default function Settings() {
             )}
           </section>
         )}
+      </div>
+
+      {/* ═══ 알림 설정 섹션 ═══ */}
+      <div>
+        <div className="flex items-center gap-2 mb-4">
+          <AlertTriangle className="w-5 h-5 text-yellow-500" />
+          <h2 className="text-xl font-bold text-gray-900">알림 설정</h2>
+        </div>
+        <p className="text-xs text-gray-500 mb-4">
+          일일 리뷰 결과를 웹훅으로 받습니다. OpenClaw, Slack, Discord, Telegram 등 웹훅 URL을 지원합니다.
+        </p>
+
+        <section className="bg-white rounded-xl border border-gray-200 p-5">
+          <h3 className="text-sm font-semibold text-gray-700 mb-3">웹훅 알림 채널</h3>
+
+          {notifConfigs.length > 0 && (
+            <div className="mb-4 space-y-2">
+              {notifConfigs.map((cfg) => (
+                <div key={cfg.id} className="flex items-center gap-2 text-sm">
+                  <CheckCircle className={`w-4 h-4 ${cfg.enabled ? "text-green-600" : "text-gray-400"}`} />
+                  <span className="font-medium capitalize">{cfg.channel}</span>
+                  <span className="text-gray-400 text-xs truncate max-w-xs">{cfg.webhook_url}</span>
+                  <span className={`text-xs px-1.5 py-0.5 rounded ${cfg.enabled ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
+                    {cfg.enabled ? "활성" : "비활성"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <select
+                value={notifChannel}
+                onChange={(e) => setNotifChannel(e.target.value)}
+                className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500"
+              >
+                <option value="openclaw">OpenClaw</option>
+                <option value="slack">Slack</option>
+                <option value="discord">Discord</option>
+                <option value="telegram">Telegram</option>
+              </select>
+            </div>
+            <input
+              type="text"
+              placeholder="웹훅 URL (https://...)"
+              value={webhookUrl}
+              onChange={(e) => setWebhookUrl(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500"
+            />
+            <div className="flex items-center gap-2">
+              <button
+                onClick={async () => {
+                  if (!webhookUrl.trim()) return;
+                  setTestingNotif(true);
+                  setNotifMessage(null);
+                  try {
+                    await testNotification(webhookUrl.trim(), notifChannel);
+                    setNotifMessage("테스트 알림 전송 성공!");
+                  } catch {
+                    setNotifMessage("테스트 알림 전송 실패. URL을 확인해주세요.");
+                  } finally {
+                    setTestingNotif(false);
+                  }
+                }}
+                disabled={testingNotif || !webhookUrl.trim()}
+                className="px-4 py-2 border border-yellow-400 text-yellow-700 text-sm rounded-lg hover:bg-yellow-50 disabled:opacity-50 transition-colors"
+              >
+                {testingNotif ? "발송 중..." : "테스트 발송"}
+              </button>
+              <button
+                onClick={async () => {
+                  if (!webhookUrl.trim()) return;
+                  setSavingNotif(true);
+                  setNotifMessage(null);
+                  try {
+                    await saveNotificationConfig(notifChannel, webhookUrl.trim(), true);
+                    await loadNotificationConfig();
+                    setNotifMessage("저장 완료!");
+                  } catch {
+                    setNotifMessage("저장 실패.");
+                  } finally {
+                    setSavingNotif(false);
+                  }
+                }}
+                disabled={savingNotif || !webhookUrl.trim()}
+                className="px-4 py-2 bg-yellow-600 text-white text-sm rounded-lg hover:bg-yellow-700 disabled:opacity-50 transition-colors"
+              >
+                {savingNotif ? "저장 중..." : "저장"}
+              </button>
+            </div>
+            {notifMessage && (
+              <p className={`text-xs ${notifMessage.includes("성공") || notifMessage.includes("완료") ? "text-green-600" : "text-red-500"}`}>
+                {notifMessage}
+              </p>
+            )}
+          </div>
+        </section>
       </div>
     </div>
   );

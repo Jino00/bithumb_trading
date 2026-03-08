@@ -1,6 +1,7 @@
 // 캠페인 성과 스냅샷 서비스 — 일별 기록 + 개선 효과 추적 + 트렌드 인텔리전스 트리거
 import { getDb } from "../db/database.js";
 import { recomputeAll } from "./trend-intelligence.js";
+import { roundN } from "./biz-metrics.js";
 
 /**
  * 현재 모든 active Meta 캠페인의 스냅샷을 기록
@@ -154,12 +155,12 @@ export function getCampaignTrend(campaignId) {
 
 function computeChange(before, after) {
   return {
-    roas: round2(after.roas - before.roas),
-    ctr: round2(after.ctr - before.ctr),
-    cpc: round2(after.cpc - before.cpc),
-    cpa: round2((after.cpa || 0) - (before.cpa || 0)),
-    spend: round2((after.spend || 0) - (before.spend || 0)),
-    revenue: round2((after.revenue || 0) - (before.revenue || 0)),
+    roas: roundN(after.roas - before.roas),
+    ctr: roundN(after.ctr - before.ctr),
+    cpc: roundN(after.cpc - before.cpc),
+    cpa: roundN((after.cpa || 0) - (before.cpa || 0)),
+    spend: roundN((after.spend || 0) - (before.spend || 0)),
+    revenue: roundN((after.revenue || 0) - (before.revenue || 0)),
   };
 }
 
@@ -231,6 +232,4 @@ function getDateNDaysAgo(n) {
   return d.toISOString().substring(0, 10);
 }
 
-function round2(n) {
-  return Math.round(n * 100) / 100;
-}
+// roundN() 삭제 → roundN() from biz-metrics.js (SSOT)
