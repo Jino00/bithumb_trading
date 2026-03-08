@@ -6,7 +6,7 @@ import path from "path";
 const MAX_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 5000;
 const FILE_POLL_INTERVAL_MS = 5000;
-const FILE_POLL_TIMEOUT_MS = 120000; // 2분 대기 최대
+const FILE_POLL_TIMEOUT_MS = 300000; // 5분 대기 최대 (대용량 영상 처리 지원)
 
 const MIME_MAP = {
   ".mp4": "video/mp4",

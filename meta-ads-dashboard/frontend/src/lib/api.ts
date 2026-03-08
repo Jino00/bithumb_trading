@@ -1077,7 +1077,7 @@ export const generateAdCopyWithMedia = (data: {
 
   return api.post<AdCopyGeneration>("/ad-copy/generate-with-media", formData, {
     headers: { "Content-Type": "multipart/form-data" },
-    timeout: 180000, // 3분 (Gemini 영상 분석 포함)
+    timeout: 600000, // 10분 (대용량 영상 업로드 + Gemini 분석 + Claude 카피 생성)
   }).then((r) => r.data);
 };
 
@@ -1378,7 +1378,7 @@ export const fetchFacebookPages = () =>
   api.get<FacebookPage[]>("/campaign-publish/pages").then((r) => r.data);
 
 export const publishCampaignToMeta = (data: CampaignPublishRequest) =>
-  api.post<PublishResult>("/campaign-publish/publish", data, { timeout: 300000 }).then((r) => r.data); // 5분 (비디오 청크 업로드 포함)
+  api.post<PublishResult>("/campaign-publish/publish", data, { timeout: 600000 }).then((r) => r.data); // 10분 (대용량 비디오 Meta 청크 업로드 + 처리 대기)
 
 // ─── 학습 기반 추천 설정 ───
 

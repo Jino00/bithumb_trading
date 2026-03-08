@@ -12,6 +12,7 @@ import {
   createMetaAdSet,
   uploadAdImage,
   uploadAdVideo,
+  waitForVideoReady,
   createAdCreative,
   createVideoAdCreative,
   createMetaAd,
@@ -130,6 +131,13 @@ router.post("/publish", async (req, res) => {
         } else {
           videoId = videoResult.data.id;
           partialResults.video_id = videoId;
+
+          // 비디오 인코딩 완료 대기 (Meta 서버에서 처리 필요)
+          console.log(`[Publish] Waiting for Meta video processing...`);
+          const readyResult = await waitForVideoReady(accessToken, videoId, 300000);
+          if (readyResult.error) {
+            console.warn(`[Publish] Video processing issue: ${readyResult.error}`);
+          }
         }
         // 썸네일도 이미지로 업로드 (비디오 광고의 커버 이미지)
         const thumbPath = mediaPath.replace(/\.[^.]+$/, "-thumb.jpg");
@@ -170,7 +178,7 @@ router.post("/publish", async (req, res) => {
       name: campaign_name,
       objective,
       status: "PAUSED",
-      special_ad_categories: ["NONE"],
+      special_ad_categories: [],
     });
     if (campaignResult.error) {
       return res.status(500).json({
@@ -183,13 +191,32 @@ router.post("/publish", async (req, res) => {
     partialResults.meta_campaign_id = metaCampaignId;
     await delay(500);
 
-    // Step 3: Ad Set 생성
+    // Step 3: Ad Set 생성 (픽셀 자동 조회 — OFFSITE_CONVERSIONS 필수)
+    let promoted_object = null;
+    if (optimization_goal === "OFFSITE_CONVERSIONS") {
+      try {
+        const pixelRes = await fetch(
+          `https://graph.facebook.com/v21.0/${adAccountId}/adspixels?fields=id,name&limit=1&access_token=${accessToken}`,
+          { signal: AbortSignal.timeout(10000) }
+        );
+        const pixelJson = await pixelRes.json();
+        if (pixelJson.data?.[0]?.id) {
+          promoted_object = { pixel_id: pixelJson.data[0].id, custom_event_type: "PURCHASE" };
+          console.log(`[Publish] Pixel found: ${pixelJson.data[0].name} (${pixelJson.data[0].id})`);
+        }
+      } catch (e) {
+        console.warn("[Publish] Pixel lookup failed:", e.message);
+      }
+    }
+
     console.log(`[Publish] Step 3: Creating ad set...`);
     const adsetResult = await createMetaAdSet(accessToken, adAccountId, {
       name: `${campaign_name} - Ad Set`,
       campaign_id: metaCampaignId,
       daily_budget,
       optimization_goal,
+      bid_strategy: "LOWEST_COST_WITHOUT_CAP",
+      promoted_object,
       targeting: targeting || { geo_locations: { countries: ["KR"] }, age_min: 18, age_max: 65 },
       start_time: start_time || new Date().toISOString(),
       status: "PAUSED",

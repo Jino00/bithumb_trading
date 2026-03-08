@@ -390,6 +390,7 @@ export async function createMetaCampaign(accessToken, adAccountId, params) {
       objective: params.objective || "OUTCOME_TRAFFIC",
       status: params.status || "PAUSED",
       special_ad_categories: JSON.stringify(params.special_ad_categories || []),
+      is_adset_budget_sharing_enabled: params.is_adset_budget_sharing_enabled ?? false,
       access_token: accessToken,
     });
     const res = await fetch(`${GRAPH_API_BASE}/act_${accountId}/campaigns`, {
@@ -407,17 +408,22 @@ export async function createMetaCampaign(accessToken, adAccountId, params) {
 export async function createMetaAdSet(accessToken, adAccountId, params) {
   try {
     const accountId = adAccountId.replace("act_", "");
-    const body = new URLSearchParams({
+    const bodyObj = {
       name: params.name,
       campaign_id: params.campaign_id,
       daily_budget: String(params.daily_budget),
       billing_event: params.billing_event || "IMPRESSIONS",
       optimization_goal: params.optimization_goal || "LINK_CLICKS",
+      bid_strategy: params.bid_strategy || "LOWEST_COST_WITHOUT_CAP",
       targeting: JSON.stringify(params.targeting),
       start_time: params.start_time,
       status: params.status || "PAUSED",
       access_token: accessToken,
-    });
+    };
+    if (params.promoted_object) {
+      bodyObj.promoted_object = JSON.stringify(params.promoted_object);
+    }
+    const body = new URLSearchParams(bodyObj);
     const res = await fetch(`${GRAPH_API_BASE}/act_${accountId}/adsets`, {
       method: "POST",
       body,
@@ -647,7 +653,7 @@ export async function fetchAdsForCampaign(accessToken, campaignId) {
 // ─── 비디오 업로드 + 비디오 크리에이티브 (대용량 영상 지원) ───
 
 export async function uploadAdVideo(accessToken, adAccountId, videoPath) {
-  const CHUNK_SIZE = 4 * 1024 * 1024; // 4MB per chunk
+  const CHUNK_SIZE = 8 * 1024 * 1024; // 8MB per chunk (대용량 영상 속도 개선)
   const VIDEO_API_BASE = "https://graph-video.facebook.com/v21.0"; // 비디오 전용 호스트 (공식문서 권장)
   try {
     const accountId = adAccountId.replace("act_", "");
@@ -694,7 +700,7 @@ export async function uploadAdVideo(accessToken, adAccountId, videoPath) {
       form.append("video_file_chunk", new Blob([chunkBuffer]), fileName);
       form.append("access_token", accessToken);
 
-      const transferRes = await fetch(url, { method: "POST", body: form, signal: AbortSignal.timeout(60000) });
+      const transferRes = await fetch(url, { method: "POST", body: form, signal: AbortSignal.timeout(120000) }); // 2분/청크 (대용량 영상 안정성)
       const transferJson = await safeParseMetaResponse(transferRes, `transfer chunk ${chunkIndex}`);
       if (transferJson.error) return transferJson;
 
@@ -718,6 +724,51 @@ export async function uploadAdVideo(accessToken, adAccountId, videoPath) {
   }
 }
 
+/**
+ * Meta 비디오 처리 상태 확인 + 완료 대기
+ * 업로드 후 Meta 서버에서 인코딩이 완료되어야 크리에이티브에 사용 가능
+ */
+export async function waitForVideoReady(accessToken, videoId, maxWaitMs = 300000) {
+  const POLL_INTERVAL = 5000; // 5초마다 확인
+  const startTime = Date.now();
+
+  console.log(`[Meta Video] Waiting for video ${videoId} to be ready (max ${maxWaitMs / 1000}s)...`);
+
+  while (Date.now() - startTime < maxWaitMs) {
+    try {
+      const res = await fetch(
+        `${GRAPH_API_BASE}/${videoId}?fields=status&access_token=${accessToken}`,
+        { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }
+      );
+      const json = await safeParseMetaResponse(res, "videoStatus");
+      if (json.error) {
+        console.warn(`[Meta Video] Status check failed: ${json.error}`);
+        await delay(POLL_INTERVAL);
+        continue;
+      }
+
+      const status = json.data?.status?.video_status || json.data?.status;
+      console.log(`[Meta Video] Video ${videoId} status: ${status}`);
+
+      if (status === "ready") {
+        console.log(`[Meta Video] Video ready! (${((Date.now() - startTime) / 1000).toFixed(1)}s)`);
+        return { ready: true, error: null };
+      }
+      if (status === "error") {
+        return { ready: false, error: "Meta 비디오 인코딩 실패" };
+      }
+    } catch (err) {
+      console.warn(`[Meta Video] Status poll error: ${err.message}`);
+    }
+
+    await delay(POLL_INTERVAL);
+  }
+
+  // 타임아웃이어도 비디오가 사용 가능할 수 있으므로 경고만
+  console.warn(`[Meta Video] Timeout waiting for video ready, proceeding anyway...`);
+  return { ready: false, error: null };
+}
+
 // Meta API 응답을 안전하게 파싱하는 헬퍼 (모든 Meta API 호출에서 공용)
 async function safeParseMetaResponse(res, phase) {
   const text = await res.text();
@@ -731,7 +782,10 @@ async function safeParseMetaResponse(res, phase) {
     return { data: null, error: `Meta API [${phase}] invalid JSON (${res.status}): ${text.substring(0, 200)}` };
   }
   if (!res.ok) {
-    return { data: null, error: json.error?.message || `Meta API [${phase}] failed (${res.status})` };
+    const errDetail = json.error?.error_user_msg || json.error?.error_subcode || "";
+    const errMsg = json.error?.message || `Meta API [${phase}] failed (${res.status})`;
+    console.error(`[Meta API] ${phase} error: ${errMsg} ${errDetail ? `(${errDetail})` : ""} | Full: ${JSON.stringify(json.error).substring(0, 500)}`);
+    return { data: null, error: `${errMsg}${errDetail ? ` — ${errDetail}` : ""}` };
   }
   return { data: json, error: null };
 }
