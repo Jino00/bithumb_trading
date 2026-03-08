@@ -1,6 +1,7 @@
-// 데이터 기반 광고 카피 생성 서비스 — 리뷰 인사이트 + Ad Library 패턴 → Claude 카피 생성
+// 데이터 기반 광고 카피 생성 서비스 — 리뷰 인사이트 + Ad Library 패턴 + 트렌드 → Claude 카피 생성
 import { getDb } from "../db/database.js";
 import { callClaudeNoTools, callClaudeWithVision, parseClaudeJson } from "./claude-client.js";
+import { getTrendContextForCopy } from "./trend-bridge.js";
 
 const SYSTEM_PROMPT = `당신은 한국 시장 전문 Meta Ads 카피라이터입니다.
 제공된 고객 리뷰 인사이트와 경쟁사 광고 분석 데이터를 기반으로 효과적인 광고 카피를 작성합니다.
@@ -383,6 +384,16 @@ function buildCopyPrompt(reviewCtx, adLibCtx, pastCtx, options, mediaContext = n
       }
     }
   }
+
+  // ─── 📈 트렌드 섹션 (최신 업계 동향 주입) ───
+  try {
+    const trendContext = getTrendContextForCopy();
+    if (trendContext) {
+      prompt += `\n---\n\n## 📈 현재 Meta Ads 트렌드 (실시간 업계 동향)\n\n`;
+      prompt += trendContext;
+      prompt += `\n\n이 트렌드 정보를 참고하여 현재 효과적인 광고 패턴과 표현을 카피에 반영하세요.\n`;
+    }
+  } catch { /* 트렌드 데이터 없으면 건너뛰기 */ }
 
   if (pastCtx.successes?.length > 0) {
     prompt += `\n---\n\n## ⭐ 과거 성공한 카피 패턴 (이런 방향으로 작성)\n\n`;

@@ -9,6 +9,7 @@ import { fetchAccountInsights, mapAccountInsightToSchema, fetchAdSetsForCampaign
 import { judgeAllCampaigns, blendThreshold } from "./campaign-judge.js";
 import { getBenchmarks } from "./trend-intelligence.js";
 import { sendReviewNotification } from "./notification.js";
+import { getExternalBenchmarks, adjustThresholdWithTrend, getAlgorithmAlerts } from "./trend-bridge.js";
 
 // ─── 액션 생성 규칙 기본 상수 (벤치마크 없을 때 fallback, 백테스트 결과 기반) ───
 const MIN_DAILY_BUDGET = 20000;
@@ -155,14 +156,26 @@ function generateActions(judgments, dailyBudgets) {
   const fSc = bm?.frequency?.sample_count || 0;
 
   // 동적 임계값 (데이터 충분하면 학습 기준, 부족하면 하드코딩)
-  const ROAS_PAUSE = blendThreshold(DEFAULT_ROAS_PAUSE, bm?.roas?.p25, rSc);
-  const ROAS_WARN_UPPER = blendThreshold(DEFAULT_ROAS_WARN_UPPER, bm?.roas?.median, rSc);
-  const CPC_DANGER = blendThreshold(DEFAULT_CPC_DANGER, bm?.cpc?.p90, cSc);
-  const CPC_WARNING = blendThreshold(DEFAULT_CPC_WARNING, bm?.cpc?.p75, cSc);
-  const ROAS_SCALE = blendThreshold(DEFAULT_ROAS_SCALE, bm?.roas?.p75, rSc);
-  const ROAS_HIGH_SCALE = blendThreshold(DEFAULT_ROAS_HIGH_SCALE, bm?.roas?.p90, rSc);
-  const FREQ_FATIGUE = blendThreshold(DEFAULT_FREQ_FATIGUE, bm?.frequency?.p75, fSc);
-  const CTR_FATIGUE = blendThreshold(DEFAULT_CTR_FATIGUE, bm?.ctr?.p25, bm?.ctr?.sample_count || 0);
+  let ROAS_PAUSE = blendThreshold(DEFAULT_ROAS_PAUSE, bm?.roas?.p25, rSc);
+  let ROAS_WARN_UPPER = blendThreshold(DEFAULT_ROAS_WARN_UPPER, bm?.roas?.median, rSc);
+  let CPC_DANGER = blendThreshold(DEFAULT_CPC_DANGER, bm?.cpc?.p90, cSc);
+  let CPC_WARNING = blendThreshold(DEFAULT_CPC_WARNING, bm?.cpc?.p75, cSc);
+  let ROAS_SCALE = blendThreshold(DEFAULT_ROAS_SCALE, bm?.roas?.p75, rSc);
+  let ROAS_HIGH_SCALE = blendThreshold(DEFAULT_ROAS_HIGH_SCALE, bm?.roas?.p90, rSc);
+  let FREQ_FATIGUE = blendThreshold(DEFAULT_FREQ_FATIGUE, bm?.frequency?.p75, fSc);
+  let CTR_FATIGUE = blendThreshold(DEFAULT_CTR_FATIGUE, bm?.ctr?.p25, bm?.ctr?.sample_count || 0);
+
+  // ─── 외부 업계 벤치마크로 미세 조정 (±15% 캡, confidence medium/high만) ───
+  let externalBm = null;
+  try { externalBm = getExternalBenchmarks(); } catch { /* 트렌드 데이터 없으면 건너뛰기 */ }
+
+  if (externalBm && externalBm.confidence !== "low") {
+    CPC_DANGER = adjustThresholdWithTrend(CPC_DANGER, externalBm.cpc_krw);
+    CPC_WARNING = adjustThresholdWithTrend(CPC_WARNING, externalBm.cpc_krw * 0.85);
+    ROAS_PAUSE = adjustThresholdWithTrend(ROAS_PAUSE, externalBm.roas * 0.2);
+    ROAS_WARN_UPPER = adjustThresholdWithTrend(ROAS_WARN_UPPER, externalBm.roas * 0.4);
+    console.log(`[DailyReview] 트렌드 조정 적용: CPC_DANGER=${Math.round(CPC_DANGER)}, CPC_WARNING=${Math.round(CPC_WARNING)} (업계 CPC ₩${externalBm.cpc_krw})`);
+  }
 
   // ─── 액션 효과 학습 데이터 로드 (우선순위 결정용) ───
   let actionEffectiveness = {};
@@ -176,8 +189,15 @@ function generateActions(judgments, dailyBudgets) {
     }
   } catch { /* 학습 데이터 없으면 건너뛰기 */ }
 
+  // 알고리즘 변경 알림 (액션 reason에 참고 정보로 추가)
+  let algoAlerts = [];
+  try { algoAlerts = getAlgorithmAlerts() || []; } catch { /* ignore */ }
+
   if (bm) {
     console.log(`[DailyReview] 동적 기준 적용: ROAS_PAUSE=${ROAS_PAUSE.toFixed(2)}, CPC_DANGER=${Math.round(CPC_DANGER)}, ROAS_SCALE=${ROAS_SCALE.toFixed(2)}`);
+  }
+  if (algoAlerts.length > 0) {
+    console.log(`[DailyReview] 알고리즘 알림 ${algoAlerts.length}건: ${algoAlerts.map(a => a.title).join(", ")}`);
   }
 
   const allActions = [];

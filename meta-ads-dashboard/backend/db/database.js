@@ -465,6 +465,17 @@ function initTables() {
       updated_at TEXT DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS trend_actionable (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      benchmarks_json TEXT,
+      strategies_json TEXT,
+      algorithm_alerts_json TEXT,
+      seasonal_context_json TEXT,
+      formats_json TEXT,
+      confidence TEXT DEFAULT 'low',
+      fetched_at TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS action_effectiveness (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       action_type TEXT NOT NULL,

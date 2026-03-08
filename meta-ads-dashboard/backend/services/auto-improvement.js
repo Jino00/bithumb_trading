@@ -7,6 +7,7 @@ import {
   updateAdSetTargeting,
 } from "./meta-api.js";
 import { sendViaOpenClaw } from "./notification.js";
+import { getStrategyModifiers } from "./trend-bridge.js";
 
 // ─── 근본 원인 분류 (daily-review 규칙 코드 → 구조화) ───
 
@@ -352,7 +353,21 @@ function pickStrategies(db, rootCauseCode) {
       "SELECT action_type, success_rate, times_applied FROM action_effectiveness WHERE times_applied >= 3 ORDER BY success_rate DESC"
     ).all();
 
-    if (rows.length < 2) return defaults;
+    // ─── 트렌드 기반 전략 수정자 (기존 전략 세트 내에서 순서만 변경) ───
+    let trendMods = null;
+    try { trendMods = getStrategyModifiers(); } catch { /* ignore */ }
+
+    if (rows.length < 2) {
+      // 학습 데이터 부족 → 트렌드만으로 전략 순서 조정
+      if (trendMods?.prefer_broad_targeting && (rootCauseCode === "roas_low_cpc_high" || rootCauseCode === "cpc_high")) {
+        console.log(`[AutoImprove] 트렌드 기반: Broad 타겟 우선 (${rootCauseCode})`);
+        return {
+          first: ["targeting_broaden", "budget_decrease_70"],
+          second: ["budget_decrease_70"],
+        };
+      }
+      return defaults;
+    }
 
     // 성공률 기반으로 전략 순서 조정
     const budgetSuccess = rows.find(r => r.action_type === "budget_decrease")?.success_rate || 0;
@@ -360,7 +375,9 @@ function pickStrategies(db, rootCauseCode) {
 
     if (rootCauseCode === "roas_low_cpc_high" || rootCauseCode === "cpc_high") {
       // CPC 관련 → 타겟 성공률이 높으면 1차에 타겟
-      if (targetSuccess > budgetSuccess && targetSuccess > 0.5) {
+      // 트렌드가 Broad 타겟 추천이면 성공률 기준 완화 (0.5 → 0.3)
+      const threshold = trendMods?.prefer_broad_targeting ? 0.3 : 0.5;
+      if (targetSuccess > budgetSuccess && targetSuccess > threshold) {
         return {
           first: ["targeting_broaden", "budget_decrease_70"],
           second: ["budget_decrease_70"],
