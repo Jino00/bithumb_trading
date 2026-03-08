@@ -1000,8 +1000,10 @@ export const fetchScrapeStatus = (productId: number) =>
 
 // Ad Copy Generation
 export interface AdCopy {
+  primary_text: string;
   headline: string;
-  body: string;
+  description: string;
+  body: string;  // 하위 호환 (primary_text와 동일)
   cta: string;
   rationale: string;
   data_sources: { review_themes: string[]; ad_patterns: string[] };

@@ -483,8 +483,9 @@ export async function createAdCreative(accessToken, adAccountId, params) {
       link: params.link,
       message: params.message,
       name: params.headline,
+      description: params.description || "",
       call_to_action: {
-        type: params.cta_type || "LEARN_MORE",
+        type: params.cta_type || "SHOP_NOW",
         value: { link: params.link },
       },
     };
@@ -514,6 +515,7 @@ export async function createAdCreative(accessToken, adAccountId, params) {
 export async function createMetaAd(accessToken, adAccountId, params) {
   try {
     const accountId = adAccountId.replace("act_", "");
+    console.log(`[Meta API] createAd params: adset=${params.adset_id}, creative=${params.creative_id}`);
     const body = new URLSearchParams({
       name: params.name,
       adset_id: params.adset_id,
@@ -526,7 +528,9 @@ export async function createMetaAd(accessToken, adAccountId, params) {
       body,
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
-    return await safeParseMetaResponse(res, "createAd");
+    const result = await safeParseMetaResponse(res, "createAd");
+    console.log(`[Meta API] createAd result: ${JSON.stringify(result).substring(0, 300)}`);
+    return result;
   } catch (err) {
     console.error("[Meta API] createAd exception:", err.message);
     return { data: null, error: err.message };
@@ -781,7 +785,7 @@ async function safeParseMetaResponse(res, phase) {
   } catch {
     return { data: null, error: `Meta API [${phase}] invalid JSON (${res.status}): ${text.substring(0, 200)}` };
   }
-  if (!res.ok) {
+  if (!res.ok || json.error) {
     const errDetail = json.error?.error_user_msg || json.error?.error_subcode || "";
     const errMsg = json.error?.message || `Meta API [${phase}] failed (${res.status})`;
     console.error(`[Meta API] ${phase} error: ${errMsg} ${errDetail ? `(${errDetail})` : ""} | Full: ${JSON.stringify(json.error).substring(0, 500)}`);
@@ -797,8 +801,9 @@ export async function createVideoAdCreative(accessToken, adAccountId, params) {
       video_id: params.video_id,
       message: params.message,
       title: params.headline,
+      link_description: params.description || "",
       call_to_action: {
-        type: params.cta_type || "LEARN_MORE",
+        type: params.cta_type || "SHOP_NOW",
         value: { link: params.link },
       },
     };

@@ -41,9 +41,9 @@ type Platform = "facebook" | "instagram" | "both";
 type Tone = "professional" | "casual" | "urgent" | "emotional" | "humorous";
 
 const COPY_TYPES: { value: CopyType; label: string }[] = [
-  { value: "full", label: "전체 (헤드라인+본문+CTA)" },
-  { value: "headline", label: "헤드라인만" },
-  { value: "body", label: "본문만" },
+  { value: "full", label: "전체 (기본문구+제목+설명+CTA)" },
+  { value: "headline", label: "제목만" },
+  { value: "body", label: "기본문구만" },
   { value: "cta", label: "CTA만" },
 ];
 
@@ -546,7 +546,8 @@ function CopyCard({ copy, index, generationId, mediaType }: { copy: AdCopy; inde
   };
 
   const handleCopyAll = () => {
-    const all = `[헤드라인]\n${copy.headline}\n\n[본문]\n${copy.body}\n\n[CTA]\n${copy.cta}`;
+    const pt = copy.primary_text || copy.body;
+    const all = `[기본 문구]\n${pt}\n\n[제목]\n${copy.headline}\n\n[설명]\n${copy.description || ""}\n\n[CTA]\n${copy.cta}`;
     handleCopy(all, "all");
   };
 
@@ -642,14 +643,19 @@ function CopyCard({ copy, index, generationId, mediaType }: { copy: AdCopy; inde
 
       {/* Card Body */}
       <div className="p-4 space-y-3">
-        {/* Headline */}
-        {copy.headline && (
-          <CopyField label="헤드라인" value={copy.headline} fieldId="headline" copiedField={copiedField} onCopy={handleCopy} />
+        {/* 기본 문구 (Primary Text) */}
+        {(copy.primary_text || copy.body) && (
+          <CopyField label="기본 문구" value={copy.primary_text || copy.body} fieldId="primary_text" copiedField={copiedField} onCopy={handleCopy} isLong />
         )}
 
-        {/* Body */}
-        {copy.body && (
-          <CopyField label="본문" value={copy.body} fieldId="body" copiedField={copiedField} onCopy={handleCopy} isLong />
+        {/* 제목 (Headline) */}
+        {copy.headline && (
+          <CopyField label="제목" value={copy.headline} fieldId="headline" copiedField={copiedField} onCopy={handleCopy} />
+        )}
+
+        {/* 설명 (Description) */}
+        {copy.description && (
+          <CopyField label="설명" value={copy.description} fieldId="description" copiedField={copiedField} onCopy={handleCopy} />
         )}
 
         {/* CTA */}

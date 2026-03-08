@@ -24,6 +24,40 @@ const __dirname = dirname(__filename);
 
 const router = Router();
 
+// ─── 헬퍼: UTM 태그 자동 생성 ───
+
+function buildUtmParams(campaignName, copyIndex) {
+  const safeCampaignName = (campaignName || "unknown")
+    .replace(/[^a-zA-Z0-9가-힣_\-\s]/g, "")
+    .replace(/\s+/g, "_")
+    .substring(0, 80);
+  const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  return {
+    utm_source: "meta",
+    utm_medium: "paid",
+    utm_campaign: safeCampaignName,
+    utm_content: `copy_${copyIndex}`,
+    utm_term: timestamp,
+  };
+}
+
+function appendUtmToUrl(url, utmParams) {
+  try {
+    const urlObj = new URL(url);
+    for (const [key, value] of Object.entries(utmParams)) {
+      urlObj.searchParams.set(key, value);
+    }
+    return urlObj.toString();
+  } catch {
+    // URL 파싱 실패 시 수동으로 쿼리 파라미터 추가
+    const sep = url.includes("?") ? "&" : "?";
+    const qs = Object.entries(utmParams)
+      .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
+      .join("&");
+    return `${url}${sep}${qs}`;
+  }
+}
+
 // ─── 헬퍼: 인증 정보 조회 ───
 
 function getCredentials() {
@@ -111,9 +145,17 @@ router.post("/publish", async (req, res) => {
       return res.status(400).json({ success: false, error: `copy_index ${copy_index}에 해당하는 카피가 없습니다.` });
     }
 
-    const { headline, body, cta } = selectedCopy;
+    const primaryText = selectedCopy.primary_text || selectedCopy.body || "";
+    const headline = selectedCopy.headline || "";
+    const description = selectedCopy.description || "";
+    const body = primaryText;  // 하위 호환성
     const { accessToken, adAccountId } = cred;
     const partialResults = {};
+
+    // UTM 태그 자동 생성 → link_url에 추가
+    const utmParams = buildUtmParams(campaign_name, copy_index);
+    const linkUrlWithUtm = appendUtmToUrl(link_url, utmParams);
+    console.log(`[Publish] Link URL with UTM: ${linkUrlWithUtm}`);
 
     // Step 1: 미디어 업로드 (이미지 또는 비디오)
     let imageHash = null;
@@ -217,7 +259,10 @@ router.post("/publish", async (req, res) => {
       optimization_goal,
       bid_strategy: "LOWEST_COST_WITHOUT_CAP",
       promoted_object,
-      targeting: targeting || { geo_locations: { countries: ["KR"] }, age_min: 18, age_max: 65 },
+      targeting: {
+        ...(targeting || { geo_locations: { countries: ["KR"] }, age_min: 18, age_max: 65 }),
+        targeting_automation: { advantage_audience: 0 },
+      },
       start_time: start_time || new Date().toISOString(),
       status: "PAUSED",
     });
@@ -245,9 +290,10 @@ router.post("/publish", async (req, res) => {
         name: `${campaign_name} - Video Creative`,
         page_id,
         video_id: videoId,
-        link: link_url,
-        message: body || "",
+        link: linkUrlWithUtm,
+        message: primaryText || "",
         headline: headline || "",
+        description: description || "",
         cta_type,
         image_hash: imageHash,
       });
@@ -255,9 +301,10 @@ router.post("/publish", async (req, res) => {
       creativeResult = await createAdCreative(accessToken, adAccountId, {
         name: `${campaign_name} - Creative`,
         page_id,
-        link: link_url,
-        message: body || "",
+        link: linkUrlWithUtm,
+        message: primaryText || "",
         headline: headline || "",
+        description: description || "",
         cta_type,
         image_hash: imageHash,
       });
@@ -300,12 +347,13 @@ router.post("/publish", async (req, res) => {
         partial_results: partialResults,
       });
     }
-    const metaAdId = adResult.data.id;
+    const metaAdId = adResult.data?.id;
+    console.log(`[Publish] Ad created: ${metaAdId}, adResult.data: ${JSON.stringify(adResult.data).substring(0, 200)}`);
 
-    // Step 6: DB 저장
+    // Step 6: DB 저장 (UTM 포함 URL 저장)
     const publishedId = savePublishedCampaign(db, {
       ad_copy_generation_id, copy_index, campaign_name, objective, daily_budget,
-      targeting, page_id, link_url,
+      targeting, page_id, link_url: linkUrlWithUtm,
       meta_campaign_id: metaCampaignId,
       meta_adset_id: metaAdsetId,
       meta_creative_id: metaCreativeId,
@@ -324,6 +372,8 @@ router.post("/publish", async (req, res) => {
       meta_creative_id: metaCreativeId,
       meta_ad_id: metaAdId,
       published_campaign_id: publishedId,
+      link_url_with_utm: linkUrlWithUtm,
+      utm_params: utmParams,
     });
   } catch (err) {
     console.error("Campaign publish error:", err);

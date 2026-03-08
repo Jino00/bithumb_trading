@@ -20,9 +20,10 @@ const SYSTEM_PROMPT = `당신은 한국 시장 전문 Meta Ads 카피라이터�
 const COPY_JSON_FORMAT = `{
   "copies": [
     {
-      "headline": "헤드라인 (25자 이내 권장)",
-      "body": "본문 텍스트 (Facebook: 125자, Instagram: 2200자 이내)",
-      "cta": "CTA 버튼 텍스트",
+      "primary_text": "기본 문구 — 광고 이미지/영상 위에 표시되는 메인 텍스트. 제품 혜택, 스토리텔링, 고객 후기 인용 등을 포함. 줄바꿈(\\n) 사용 가능. Facebook 125자 권장(최대 2,000자), Instagram 2,200자 이내",
+      "headline": "제목 — 이미지/영상 아래 굵은 글씨로 표시. 25자 이내. 핵심 가치를 한 줄로 압축",
+      "description": "설명 — 제목 아래 보조 텍스트. 30자 이내. 리뷰 수, 혜택, 프로모션 등 보조 정보",
+      "cta": "CTA 버튼 텍스트 (SHOP_NOW, LEARN_MORE 등)",
       "rationale": "이 카피를 작성한 근거 (어떤 리뷰 데이터/광고 패턴을 참고했는지)"
     }
   ]
@@ -37,9 +38,9 @@ const TONE_DESCRIPTIONS = {
 };
 
 const PLATFORM_GUIDELINES = {
-  facebook: "Facebook: 헤드라인 25자 이내, 본문 125자 권장 (최대 2,000자), CTA 명확하게",
-  instagram: "Instagram: 해시태그 활용, 이모지 적극 사용, 본문 첫 줄에 핵심 메시지, 스토리 친화적",
-  both: "Facebook + Instagram 공통: 양쪽 모두에서 효과적인 범용 카피, 핵심 메시지 간결하게",
+  facebook: "Facebook: 기본 문구(primary_text) 125자 권장(최대 2,000자), 제목(headline) 25자 이내, 설명(description) 30자 이내, CTA 명확하게",
+  instagram: "Instagram: 기본 문구에 해시태그·이모지 적극 사용, 첫 줄에 핵심 메시지, 제목 25자 이내, 설명 30자 이내",
+  both: "Facebook + Instagram 공통: 기본 문구·제목·설명 모두 양쪽에서 효과적인 범용 카피",
 };
 
 /**
@@ -75,9 +76,11 @@ export async function generateAdCopy(productId, options = {}, mediaContext = nul
   const parsed = parseClaudeJson(result, JSON.parse(generateMockCopy(reviewContext)));
 
   const copies = (parsed.copies || []).map((c) => ({
+    primary_text: c.primary_text || c.body || "",
     headline: c.headline || "",
-    body: c.body || "",
-    cta: c.cta || "자세히 보기",
+    description: c.description || "",
+    body: c.primary_text || c.body || "",  // 하위 호환성 유지
+    cta: c.cta || "SHOP_NOW",
     rationale: c.rationale || "",
     data_sources: {
       review_themes: extractUsedThemes(c.rationale, reviewContext),
@@ -494,21 +497,24 @@ function generateMockCopy(reviewCtx) {
   return JSON.stringify({
     copies: [
       {
+        primary_text: `고객 리뷰 ${reviewCtx.totalReviewCount.toLocaleString()}건이 증명하는 품질.\n지금 바로 확인하세요.`,
         headline: `${reviewCtx.totalReviewCount.toLocaleString()}명이 선택한 ${reviewCtx.productName}`,
-        body: `고객 리뷰 ${reviewCtx.totalReviewCount.toLocaleString()}건이 증명하는 품질. 지금 바로 확인하세요.`,
-        cta: "지금 구매하기",
+        description: `평점 ${reviewCtx.overallRating || 4.5}점 · 무료배송`,
+        cta: "SHOP_NOW",
         rationale: `총 리뷰 ${reviewCtx.totalReviewCount}건의 데이터를 기반으로 숫자 강조 패턴을 활용한 신뢰 구축형 카피.`,
       },
       {
+        primary_text: `수많은 고객이 인정한 품질.\n직접 경험해보세요.`,
         headline: `${reviewCtx.productName}, 후회 없는 선택`,
-        body: `수많은 고객이 인정한 품질. 직접 경험해보세요.`,
-        cta: "자세히 보기",
+        description: `리뷰 ${reviewCtx.totalReviewCount.toLocaleString()}건 · 지금 확인`,
+        cta: "SHOP_NOW",
         rationale: `긍정적 전반 감정(${reviewCtx.overallSentiment?.positive_pct || 70}%)을 반영한 감성 어필형 카피.`,
       },
       {
+        primary_text: `한정 수량! 베스트셀러 제품을 특별 가격에 만나보세요.`,
         headline: `지금 놓치면 후회할 ${reviewCtx.productName}`,
-        body: `한정 수량! 베스트셀러 제품을 특별 가격에 만나보세요.`,
-        cta: "지금 구매하기",
+        description: `오늘만 특별 혜택`,
+        cta: "SHOP_NOW",
         rationale: `긴급감(FOMO) 패턴 + 베스트셀러 소셜 프루프 활용.`,
       },
     ],
