@@ -81,18 +81,16 @@ export async function runDailyReview() {
 
   console.log(`[DailyReview] Review complete: ${campaigns.length} campaigns, ${actions.length} actions generated`);
 
-  // 9. 알림 발송 (액션이 있을 때만)
-  if (actions.length > 0) {
-    try {
-      await sendReviewNotification({
-        date: today,
-        total_campaigns: campaigns.length,
-        actions,
-        summary,
-      });
-    } catch (err) {
-      console.error("[DailyReview] Notification failed:", err.message);
-    }
+  // 9. 알림 발송 (항상 — 아침 브리핑)
+  try {
+    await sendReviewNotification({
+      date: today,
+      total_campaigns: campaigns.length,
+      actions,
+      summary,
+    });
+  } catch (err) {
+    console.error("[DailyReview] Notification failed:", err.message);
   }
 
   return { run_id: runId, total_campaigns: campaigns.length, actions_generated: actions.length, actions };

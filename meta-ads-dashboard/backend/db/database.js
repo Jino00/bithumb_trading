@@ -442,6 +442,29 @@ function initTables() {
       UNIQUE(campaign_id, metric_name)
     );
 
+    CREATE TABLE IF NOT EXISTS paused_campaign_improvements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id INTEGER NOT NULL,
+      meta_campaign_id TEXT NOT NULL,
+      campaign_name TEXT NOT NULL,
+      root_cause TEXT NOT NULL,
+      pause_reason TEXT,
+      pause_rule_code TEXT,
+      original_budget REAL,
+      adset_id TEXT,
+      review_run_id INTEGER,
+      cooling_days INTEGER DEFAULT 3,
+      status TEXT DEFAULT 'cooling',
+      attempt_count INTEGER DEFAULT 0,
+      max_attempts INTEGER DEFAULT 2,
+      strategy_1st TEXT,
+      strategy_2nd TEXT,
+      last_attempt_at TEXT,
+      resolved_at TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS action_effectiveness (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       action_type TEXT NOT NULL,

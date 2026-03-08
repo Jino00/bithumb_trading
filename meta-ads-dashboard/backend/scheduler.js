@@ -4,6 +4,7 @@ import { refreshTrendsData, getLastRefreshTime } from "./services/trend-refresh.
 import { takeSnapshotAll } from "./services/snapshot-service.js";
 import { syncCafe24OrdersJob } from "./services/cafe24-sync-job.js";
 import { runDailyReview } from "./services/daily-review.js";
+import { runAutoImprovement } from "./services/auto-improvement.js";
 
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 
@@ -63,7 +64,19 @@ export function startScheduler() {
     }
   }, { timezone: "Asia/Seoul" });
 
-  console.log("[Scheduler] Daily tasks: trends@06:00, snapshots@07:00, cafe24-sync@08:00, daily-review@09:00 KST");
+  // 매일 10:00 KST — 일시정지 캠페인 자동 개선 파이프라인
+  cron.schedule("0 10 * * *", async () => {
+    console.log("[Scheduler] Running auto-improvement pipeline...");
+    try {
+      const result = await runAutoImprovement();
+      const total = result.improved.length + result.retried.length + result.manual.length;
+      console.log(`[Scheduler] Auto-improvement: ${total} campaigns processed (improved:${result.improved.length}, retried:${result.retried.length}, manual:${result.manual.length})`);
+    } catch (err) {
+      console.error("[Scheduler] Auto-improvement failed:", err.message);
+    }
+  }, { timezone: "Asia/Seoul" });
+
+  console.log("[Scheduler] Daily tasks: trends@06:00, snapshots@07:00, cafe24-sync@08:00, daily-review@09:00, auto-improve@10:00 KST");
 
   // 시작 시 마지막 갱신 확인 → 24시간 이상 지났으면 즉시 갱신
   checkAndRefreshOnStartup();

@@ -6,6 +6,7 @@ import { runDailyReview } from "../services/daily-review.js";
 import { sendTestNotification } from "../services/notification.js";
 import { logImprovement } from "../services/snapshot-service.js";
 import { assessDataMaturity } from "../services/trend-intelligence.js";
+import { registerPausedCampaign, runAutoImprovement, getAutoImprovements, getAutoImprovementDetail } from "../services/auto-improvement.js";
 
 const router = Router();
 
@@ -234,6 +235,40 @@ router.get("/learning-status", (_req, res) => {
   }
 });
 
+// ─── 자동 개선 파이프라인 ───
+
+/** 자동 개선 추적 현황 조회 */
+router.get("/auto-improvements", (req, res) => {
+  try {
+    const { status } = req.query;
+    const records = getAutoImprovements(status || null);
+    res.json(records);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** 자동 개선 상세 조회 */
+router.get("/auto-improvements/:id", (req, res) => {
+  try {
+    const record = getAutoImprovementDetail(Number(req.params.id));
+    if (!record) return res.status(404).json({ error: "Not found" });
+    res.json(record);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** 자동 개선 수동 트리거 */
+router.post("/run-auto-improvement", async (_req, res) => {
+  try {
+    const result = await runAutoImprovement();
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── 알림 설정 ───
 
 /** 알림 설정 조회 */
@@ -350,6 +385,16 @@ async function executeAction(db, action) {
 
   // ─── 학습 피드백: improvement_log 자동 생성 ───
   autoLogImprovement(db, action);
+
+  // ─── pause 실행 시 자동 개선 파이프라인에 등록 ───
+  if (action.action_type === "pause") {
+    try {
+      const registered = registerPausedCampaign(action, action.review_run_id || null);
+      console.log(`[Actions] Auto-improvement registered: ${action.campaign_name} → ${registered.status}`);
+    } catch (err) {
+      console.warn(`[Actions] Auto-improvement registration failed: ${err.message}`);
+    }
+  }
 
   return { success: true, action_id: action.id, meta_response: result.data };
 }
