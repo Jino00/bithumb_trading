@@ -6,14 +6,22 @@ import { getTrendContextForCopy } from "./trend-bridge.js";
 const SYSTEM_PROMPT = `당신은 한국 시장 전문 Meta Ads 카피라이터입니다.
 제공된 고객 리뷰 인사이트와 경쟁사 광고 분석 데이터를 기반으로 효과적인 광고 카피를 작성합니다.
 
-██ 최우선 규칙 — primary_text 글자 수 제한 (절대 위반 금지) ██
-- primary_text는 반드시 한글 기준 40~55자 이내 (공백·이모지 포함)
-- 줄바꿈(\\n) 절대 금지. 반드시 한 줄로 작성
-- 해시태그(#) 절대 금지 — 해시태그는 primary_text에 넣지 않음
-- 이모지는 최대 1~2개만 허용
-- "더보기"를 눌러야 보이는 긴 카피는 실패한 카피임
-- 좋은 예: "지문 걱정 끝! 4,042명이 선택한 TPU 필름 ✨" (28자)
-- 나쁜 예: "😱 핸드폰 화면이 이렇게 더러워졌다고?\\n✅ 더럽..." (여러 줄, 100자 초과 = 실패)
+██ 최우선 규칙 — primary_text 형식 (절대 위반 금지) ██
+- primary_text는 정확히 2줄로 작성 (줄바꿈 \\n 1회만 사용)
+- 각 줄은 한글 기준 20~30자 이내 (총 40~60자)
+- 1줄: 감성적 훅 또는 핵심 메시지 + 이모지 1개
+- 2줄: 제품 혜택 또는 보조 메시지 + 이모지 0~1개
+- 해시태그(#), 제품링크 URL 절대 금지
+- 이모지는 전체 최대 2개
+- 3줄 이상 = 실패한 카피
+
+좋은 예:
+"매트한 질감으로 고급스러움 업 👆\\n강력한 자력으로 완벽 충전! ⚡"
+"지문 걱정 끝, 4,042명이 선택한 이유 ✨\\n화면 항상 깨끗하게 유지돼요"
+"아이폰 본연의 디자인 그대로 보호 ✨\\n티 안 나는 완벽한 TPU 필름"
+
+나쁜 예 (3줄 이상, 해시태그, URL 포함 = 실패):
+"😱 핸드폰 화면이 더러워졌다고?\\n✅ 더럽\\n✅ 지문\\n💡 이건..."
 
 핵심 원칙:
 1. 고객이 실제로 사용하는 표현과 언급하는 장점을 카피에 반영
@@ -28,7 +36,7 @@ const SYSTEM_PROMPT = `당신은 한국 시장 전문 Meta Ads 카피라이터�
 const COPY_JSON_FORMAT = `{
   "copies": [
     {
-      "primary_text": "40~55자 이내 한 줄 카피. 줄바꿈·해시태그 금지. 이모지 최대 2개. 예: '지문 걱정 끝! 4,042명이 선택한 TPU 필름 ✨'",
+      "primary_text": "정확히 2줄 카피 (줄바꿈 1회). 각 줄 20~30자. 이모지 총 2개 이내. 해시태그·URL 금지. 예: '지문 걱정 끝, 4,042명이 선택한 이유 ✨\\n화면 항상 깨끗하게 유지돼요'",
       "headline": "제목 25자 이내. 핵심 가치 한 줄 압축",
       "description": "설명 30자 이내. 리뷰 수·혜택·프로모션 등 보조 정보",
       "cta": "SHOP_NOW 또는 LEARN_MORE",
@@ -47,8 +55,8 @@ const TONE_DESCRIPTIONS = {
 
 const PLATFORM_GUIDELINES = {
   facebook: "Facebook: 기본 문구(primary_text) 125자 권장, 제목(headline) 25자 이내, 설명(description) 30자 이내, CTA 명확하게",
-  instagram: "Instagram (주력 매체): 기본 문구는 '더보기' 없이 한눈에 보이도록 한글 55자 이내로 작성. 이모지 1~2개 자연스럽게 배치. 제목 25자 이내, 설명 30자 이내",
-  both: "Instagram 중심 (주력 매체): 기본 문구는 인스타 피드에서 '더보기' 없이 보이는 한글 55자 이내. 이모지 1~2개 허용. 제목 25자 이내, 설명 30자 이내",
+  instagram: "Instagram (주력 매체): 기본 문구는 정확히 2줄 (줄바꿈 1회), 각 줄 20~30자, 이모지 1~2개. 제목 25자 이내, 설명 30자 이내",
+  both: "Instagram 중심 (주력 매체): 기본 문구는 정확히 2줄 (줄바꿈 1회), 각 줄 20~30자, 이모지 1~2개. 제목 25자 이내, 설명 30자 이내",
 };
 
 /**
@@ -475,39 +483,78 @@ function extractUsedThemes(rationale, reviewCtx) {
 }
 
 /**
- * primary_text 후처리 — 인스타 피드에서 "더보기" 없이 보이도록 강제 정리
- * 1. 줄바꿈 → 공백으로 치환 (한 줄로 만들기)
- * 2. 해시태그 제거
- * 3. 연속 공백/이모지 정리
- * 4. 55자 초과 시 마지막 문장 부호 또는 공백 기준으로 자르기
+ * primary_text 후처리 — 인스타 피드 2줄 형식으로 강제 정리
+ * 1. 해시태그·URL 제거
+ * 2. 3줄 이상 → 2줄로 축소
+ * 3. 각 줄 30자 초과 시 트림
+ * 4. 줄바꿈 없으면 중간 지점에서 자연스럽게 분리
  */
 function sanitizePrimaryText(text) {
   if (!text) return "";
 
-  // 줄바꿈 → 공백
-  let cleaned = text.replace(/[\n\r]+/g, " ");
-
-  // 해시태그 제거 (#단어)
-  cleaned = cleaned.replace(/#\S+/g, "");
-
+  // 해시태그 제거
+  let cleaned = text.replace(/#\S+/g, "");
+  // URL 제거
+  cleaned = cleaned.replace(/https?:\/\/\S+/g, "");
   // 연속 공백 정리
-  cleaned = cleaned.replace(/\s{2,}/g, " ").trim();
+  cleaned = cleaned.replace(/[ \t]{2,}/g, " ");
 
-  // 55자 이내면 그대로 반환
-  if (cleaned.length <= 55) return cleaned;
+  // 줄 분리
+  let lines = cleaned.split(/[\n\r]+/).map(l => l.trim()).filter(l => l.length > 0);
 
-  // 55자 초과: 55자까지 자르고 마지막 완전한 단어/문장에서 끊기
-  const truncated = cleaned.substring(0, 55);
-  const lastSpace = truncated.lastIndexOf(" ");
-  const lastPunct = Math.max(
-    truncated.lastIndexOf("."), truncated.lastIndexOf("!"),
-    truncated.lastIndexOf("?"), truncated.lastIndexOf("~"),
-    truncated.lastIndexOf(",")
-  );
-  const cutAt = Math.max(lastPunct, lastSpace, 30);
+  // 3줄 이상이면 앞 2줄만 사용
+  if (lines.length > 2) {
+    console.log(`[Ad Copy] primary_text ${lines.length}줄 → 2줄로 축소`);
+    lines = lines.slice(0, 2);
+  }
 
-  console.log(`[Ad Copy] primary_text truncated: ${cleaned.length}자 → ${cutAt}자`);
-  return cleaned.substring(0, cutAt).trim();
+  // 줄바꿈 없는 긴 텍스트 → 자연스럽게 2줄로 분리
+  if (lines.length === 1 && lines[0].length > 35) {
+    const single = lines[0];
+    // 문장부호 또는 공백 기준으로 분리
+    const midPunct = findNaturalBreak(single);
+    if (midPunct > 10 && midPunct < single.length - 5) {
+      lines = [single.substring(0, midPunct).trim(), single.substring(midPunct).trim()];
+    }
+  }
+
+  // 각 줄 30자 트림
+  lines = lines.map(line => {
+    if (line.length <= 30) return line;
+    const cut = line.substring(0, 30);
+    const lastBreak = Math.max(cut.lastIndexOf(" "), cut.lastIndexOf(","), cut.lastIndexOf("!"), cut.lastIndexOf("."));
+    const trimAt = lastBreak > 15 ? lastBreak : 30;
+    console.log(`[Ad Copy] 줄 트림: ${line.length}자 → ${trimAt}자`);
+    return cut.substring(0, trimAt).trim();
+  });
+
+  return lines.join("\n");
+}
+
+/** 자연스러운 줄바꿈 지점 찾기 (문장부호, 쉼표, 공백 순) */
+function findNaturalBreak(text) {
+  const mid = Math.floor(text.length / 2);
+  const searchRange = Math.floor(text.length * 0.3);
+
+  // 중간 부근에서 문장부호 찾기
+  for (const char of [".", "!", "?", ",", "~"]) {
+    for (let i = mid; i < mid + searchRange && i < text.length; i++) {
+      if (text[i] === char) return i + 1;
+    }
+    for (let i = mid - 1; i > mid - searchRange && i >= 0; i--) {
+      if (text[i] === char) return i + 1;
+    }
+  }
+
+  // 문장부호 없으면 중간 부근 공백
+  for (let i = mid; i < mid + searchRange && i < text.length; i++) {
+    if (text[i] === " ") return i;
+  }
+  for (let i = mid - 1; i > mid - searchRange && i >= 0; i--) {
+    if (text[i] === " ") return i;
+  }
+
+  return mid;
 }
 
 /**
@@ -541,21 +588,21 @@ function generateMockCopy(reviewCtx) {
   return JSON.stringify({
     copies: [
       {
-        primary_text: `리뷰 ${reviewCtx.totalReviewCount.toLocaleString()}건이 증명하는 ${reviewCtx.productName} ✨ 직접 확인해보세요`,
+        primary_text: `${reviewCtx.totalReviewCount.toLocaleString()}명이 증명한 품질 ✨\n${reviewCtx.productName}, 직접 확인해보세요`,
         headline: `${reviewCtx.totalReviewCount.toLocaleString()}명이 선택한 ${reviewCtx.productName}`,
         description: `평점 ${reviewCtx.overallRating || 4.5}점 · 무료배송`,
         cta: "SHOP_NOW",
         rationale: `총 리뷰 ${reviewCtx.totalReviewCount}건의 데이터를 기반으로 숫자 강조 패턴을 활용한 신뢰 구축형 카피.`,
       },
       {
-        primary_text: `고객이 인정한 품질, 직접 경험해보세요 🙌`,
+        primary_text: `고객이 인정한 품질 🙌\n직접 경험해보세요`,
         headline: `${reviewCtx.productName}, 후회 없는 선택`,
         description: `리뷰 ${reviewCtx.totalReviewCount.toLocaleString()}건 · 지금 확인`,
         cta: "SHOP_NOW",
         rationale: `긍정적 전반 감정(${reviewCtx.overallSentiment?.positive_pct || 70}%)을 반영한 감성 어필형 카피.`,
       },
       {
-        primary_text: `한정 수량! 베스트셀러를 특별 가격에 🔥`,
+        primary_text: `한정 수량! 베스트셀러 특가 🔥\n지금 놓치면 후회할 가격이에요`,
         headline: `지금 놓치면 후회할 ${reviewCtx.productName}`,
         description: `오늘만 특별 혜택`,
         cta: "SHOP_NOW",
