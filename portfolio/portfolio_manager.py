@@ -204,7 +204,7 @@ class PortfolioManager:
         try:
             # 1. 과거 데이터 수집
             fetcher = DataFetcher(self.client)
-            df = fetcher.fetch(coin, days=config.BACKTEST_DAYS, interval="24h")
+            df = fetcher.fetch(coin, days=config.BACKTEST_DAYS, interval=config.RSI_CANDLE_INTERVAL)
             if df is None or df.empty:
                 logger.warning(f"[Portfolio] {coin} 데이터 수집 실패 — 블랙리스트 등록")
                 self._add_to_blacklist(coin, "데이터 수집 실패")
