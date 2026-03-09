@@ -389,6 +389,11 @@ function saveReviewRun(db, date, totalCampaigns, actions, summary) {
 }
 
 function saveActions(db, runId, actions) {
+  // 중복 방지: 같은 캠페인에 같은 action_type으로 pending 상태인 액션이 이미 있으면 스킵
+  const checkDup = db.prepare(`
+    SELECT COUNT(*) as cnt FROM action_queue
+    WHERE meta_campaign_id = ? AND action_type = ? AND status = 'pending'
+  `);
   const stmt = db.prepare(`
     INSERT INTO action_queue (
       review_run_id, campaign_name, meta_campaign_id, action_type,
@@ -397,8 +402,15 @@ function saveActions(db, runId, actions) {
       benchmark_comparison_json, profitability_json
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
+  let skipped = 0;
   const insertMany = db.transaction((items) => {
     for (const a of items) {
+      const { cnt } = checkDup.get(a.meta_campaign_id, a.action_type);
+      if (cnt > 0) {
+        skipped++;
+        console.log(`[Daily Review] 중복 스킵: ${a.campaign_name} (${a.action_type}) — 이미 pending 액션 존재`);
+        continue;
+      }
       stmt.run(
         runId, a.campaign_name, a.meta_campaign_id, a.action_type,
         a.current_value, a.proposed_value, a.reason, a.verdict, a.score,
@@ -412,4 +424,5 @@ function saveActions(db, runId, actions) {
     }
   });
   insertMany(actions);
+  if (skipped > 0) console.log(`[Daily Review] ${skipped}건 중복 액션 스킵됨`);
 }

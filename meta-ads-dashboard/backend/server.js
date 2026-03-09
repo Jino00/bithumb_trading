@@ -21,7 +21,7 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors({ origin: ["http://localhost:5173", "http://127.0.0.1:5173"] }));
+app.use(cors({ origin: ["http://localhost:5173", "http://127.0.0.1:5173", "http://100.97.123.35:5173"] }));
 app.use(express.json());
 
 // DB 초기화
@@ -43,7 +43,7 @@ app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, "0.0.0.0", () => {
   console.log(`Meta Ads Intelligence API running on http://localhost:${PORT}`);
   startScheduler();
 });

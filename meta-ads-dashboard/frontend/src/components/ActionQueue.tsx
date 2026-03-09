@@ -592,6 +592,17 @@ function ActionCard({
               {improvement && <ImprovementBadge result={improvement} />}
             </div>
             <p className="text-sm text-gray-500 mt-1">{action.reason}</p>
+            <div className="flex items-center gap-2 mt-1.5 text-xs text-gray-400">
+              <span>📅 {action.created_at ? new Date(action.created_at + "Z").toLocaleDateString("ko-KR", { year: "numeric", month: "short", day: "numeric" }) : "날짜 없음"}</span>
+              <span>·</span>
+              <span>분석 기간: 최근 7일</span>
+              {action.executed_at && (
+                <>
+                  <span>·</span>
+                  <span>실행: {new Date(action.executed_at + "Z").toLocaleDateString("ko-KR", { month: "short", day: "numeric" })}</span>
+                </>
+              )}
+            </div>
             <div className="flex items-center gap-3 mt-2 text-xs flex-wrap">
               {isBudget ? (
                 <>
