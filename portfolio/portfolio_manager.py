@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 # ── LiveMonitor 임포트 (main.py에 정의) ───────────────────────────────────────
 # 순환 임포트 방지를 위해 지연 임포트로 처리한다.
 def _import_live_monitor():
-    from main import LiveMonitor
+    from bot.trading_bot import LiveMonitor
     return LiveMonitor
 
 
