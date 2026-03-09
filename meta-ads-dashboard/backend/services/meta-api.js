@@ -829,3 +829,79 @@ export async function createVideoAdCreative(accessToken, adAccountId, params) {
     return { data: null, error: err.message };
   }
 }
+
+// ─── WMA용: 7일 일별 인사이트 + 캠페인별 그룹핑 ───
+
+/**
+ * 7일 일별 캠페인 인사이트 (time_increment=1) — WMA 계산용
+ * ACTIVE 캠페인만 조회, 페이지네이션 포함
+ * @returns {{ data: Array, error: string|null }}
+ */
+export async function fetchDailyBreakdown7d(accessToken, adAccountId) {
+  try {
+    const accountId = adAccountId.replace("act_", "");
+    const fields = "campaign_id,campaign_name,impressions,clicks,spend,ctr,cpc,frequency,cpm,actions,action_values,purchase_roas,date_start,date_stop";
+
+    const until = new Date().toISOString().split("T")[0];
+    const since = new Date(Date.now() - 7 * 86400000).toISOString().split("T")[0];
+    const timeRange = JSON.stringify({ since, until });
+
+    let allData = [];
+    let url = `${GRAPH_API_BASE}/act_${accountId}/insights?fields=${fields}&time_range=${encodeURIComponent(timeRange)}&time_increment=1&level=campaign&limit=500&access_token=${accessToken}`;
+
+    while (url) {
+      const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
+      if (!res.ok) {
+        const err = await res.json();
+        return { data: null, error: err.error?.message || "Failed to fetch daily breakdown" };
+      }
+      const json = await res.json();
+      allData = allData.concat(json.data || []);
+
+      // 페이지네이션 (7일 × ~30캠페인 ≈ 210행, 보통 1페이지)
+      url = json.paging?.next || null;
+      if (url) await delay(300);
+    }
+
+    return { data: allData, error: null };
+  } catch (err) {
+    return { data: null, error: err.message };
+  }
+}
+
+/**
+ * 일별 인사이트를 캠페인별로 그룹핑 (WMA 계산 준비)
+ * @param {Array} dailyInsights — fetchDailyBreakdown7d() 반환 배열
+ * @returns {{ [campaign_id]: { name, days: Array } }}
+ */
+export function groupDailyByCampaign(dailyInsights) {
+  const groups = {};
+  for (const row of dailyInsights) {
+    const cid = row.campaign_id;
+    if (!groups[cid]) {
+      groups[cid] = { name: row.campaign_name, days: [] };
+    }
+    const funnel = extractFunnelData(row);
+    groups[cid].days.push({
+      date: row.date_start,
+      spend: parseFloat(row.spend || "0"),
+      impressions: parseInt(row.impressions || "0", 10),
+      clicks: parseInt(row.clicks || "0", 10),
+      ctr: parseFloat(row.ctr || "0"),
+      cpc: parseFloat(row.cpc || "0"),
+      frequency: parseFloat(row.frequency || "0"),
+      roas: extractPurchaseRoas(row),
+      revenue: extractPurchaseRevenue(row),
+      purchases: extractPurchaseCount(row),
+      landing_page_views: funnel.landing_page_views,
+      content_views: funnel.content_views,
+      add_to_cart: funnel.add_to_cart,
+      initiate_checkout: funnel.initiate_checkout,
+    });
+  }
+  // 날짜 오름차순 정렬
+  for (const cid of Object.keys(groups)) {
+    groups[cid].days.sort((a, b) => a.date.localeCompare(b.date));
+  }
+  return groups;
+}

@@ -596,6 +596,12 @@ function ActionCard({
               <span>📅 {action.created_at ? new Date(action.created_at + "Z").toLocaleDateString("ko-KR", { year: "numeric", month: "short", day: "numeric" }) : "날짜 없음"}</span>
               <span>·</span>
               <span>분석 기간: 최근 7일</span>
+              {action.trend_direction === "improving" && (
+                <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">📈 개선 중</span>
+              )}
+              {action.trend_direction === "declining" && (
+                <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">📉 하락 중</span>
+              )}
               {action.executed_at && (
                 <>
                   <span>·</span>

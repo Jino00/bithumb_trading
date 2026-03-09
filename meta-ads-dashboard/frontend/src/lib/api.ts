@@ -1225,6 +1225,7 @@ export interface ActionQueueItem {
   profitability_json: string | null;
   adset_id: string | null;
   improvement_log_id: number | null;
+  trend_direction: "improving" | "declining" | "flat" | null;
 }
 
 export interface FunnelDiagnosis {

@@ -95,6 +95,17 @@ function formatReviewMessage({ date, total_campaigns, actions, summary }) {
     lines.push(`판정: 🟢SCALE ${dist.SCALE || 0} / 🟡MAINTAIN ${dist.MAINTAIN || 0} / 🟠MODIFY ${dist.MODIFY || 0} / 🔴PAUSE ${dist.PAUSE || 0}`);
   }
 
+  // 추세 요약 (WMA 적용 시)
+  if (actions && actions.length > 0) {
+    const improving = actions.filter((a) => a.trend_direction === "improving").length;
+    const declining = actions.filter((a) => a.trend_direction === "declining").length;
+    const flat = actions.filter((a) => a.trend_direction === "flat").length;
+    const hasTrend = improving + declining + flat > 0;
+    if (hasTrend) {
+      lines.push(`📊 추세: 📈개선 ${improving} / 📉하락 ${declining} / ➡️안정 ${flat}`);
+    }
+  }
+
   if (!actions || actions.length === 0) {
     lines.push("");
     lines.push("✅ 변경 필요 없음 — 모든 캠페인 정상 운영 중");

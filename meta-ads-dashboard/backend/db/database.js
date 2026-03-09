@@ -404,6 +404,7 @@ function initTables() {
   addColumnIfNotExists("action_queue", "profitability_json", "TEXT");
   addColumnIfNotExists("action_queue", "adset_id", "TEXT");
   addColumnIfNotExists("action_queue", "improvement_log_id", "INTEGER");
+  addColumnIfNotExists("action_queue", "trend_direction", "TEXT");
 
   // ─── 트렌드 인텔리전스: 동적 벤치마크 + 메트릭별 트렌드 ───
   db.exec(`

@@ -5,11 +5,12 @@
 //   - ROAS 0.5~1.0x + CPC >₩1,000 구간이 사각지대 → 새 규칙 추가
 //   - Frequency/예산 규칙은 실전에서 거의 발동 안 됨 → 임계값 조정
 import { getDb } from "../db/database.js";
-import { fetchAccountInsights, mapAccountInsightToSchema, fetchAdSetsForCampaign } from "./meta-api.js";
+import { fetchAccountInsights, mapAccountInsightToSchema, fetchAdSetsForCampaign, fetchDailyBreakdown7d, groupDailyByCampaign } from "./meta-api.js";
 import { judgeAllCampaigns, blendThreshold } from "./campaign-judge.js";
 import { getBenchmarks } from "./trend-intelligence.js";
 import { sendReviewNotification } from "./notification.js";
 import { getExternalBenchmarks, adjustThresholdWithTrend, getAlgorithmAlerts } from "./trend-bridge.js";
+import { calcWmaMetrics } from "./wma-metrics.js";
 
 // ─── 액션 생성 규칙 기본 상수 (벤치마크 없을 때 fallback, 백테스트 결과 기반) ───
 const MIN_DAILY_BUDGET = 20000;
@@ -50,15 +51,63 @@ export async function runDailyReview() {
     return { run_id: null, total_campaigns: 0, actions_generated: 0, actions: [], skipped: true, reason: "no_credentials" };
   }
 
-  // 2. 7일 인사이트 조회 (안정적인 판정 기간)
-  const { data: insights7d, error: err7d } = await fetchAccountInsights(creds.access_token, creds.selected_ad_account_id, "7d");
-  if (err7d || !insights7d?.length) {
-    console.warn(`[DailyReview] Failed to fetch 7d insights: ${err7d || "no data"}`);
-    return { run_id: null, total_campaigns: 0, actions_generated: 0, actions: [], skipped: true, reason: err7d || "no_insights" };
+  // 2. 7일 일별 인사이트 조회 (WMA용) — 실패 시 기존 집계 방식으로 fallback
+  let campaigns;
+  let wmaApplied = false;
+
+  try {
+    const { data: dailyInsights, error: errDaily } = await fetchDailyBreakdown7d(creds.access_token, creds.selected_ad_account_id);
+
+    if (!errDaily && dailyInsights?.length >= 7) {
+      // WMA 경로: 일별 데이터 → 캠페인별 그룹핑 → WMA 계산
+      const grouped = groupDailyByCampaign(dailyInsights);
+      campaigns = Object.entries(grouped).map(([campaignId, data]) => {
+        const wma = calcWmaMetrics(data.days);
+        return {
+          name: data.name,
+          status: "active",
+          ctr: wma.ctr,
+          roas: wma.roas,
+          cpc: wma.cpc,
+          frequency: wma.frequency,
+          daily_spend: wma.daily_spend,
+          total_spend: wma.spend,
+          impressions: wma.impressions,
+          clicks: wma.clicks,
+          conversions: wma.purchases,
+          revenue: wma.revenue,
+          aov: wma.aov,
+          cpa: wma.cpa,
+          purchase_count: wma.purchases,
+          landing_page_views: wma.landing_page_views,
+          content_views: wma.content_views,
+          add_to_cart_count: wma.add_to_cart_count,
+          initiate_checkout_count: wma.initiate_checkout_count,
+          meta_campaign_id: campaignId,
+          source: "meta",
+          // WMA 메타데이터
+          _wma_trend: wma.trend_direction,
+          _wma_day_count: wma.day_count,
+          _wma_insufficient: wma.insufficient,
+        };
+      });
+      wmaApplied = true;
+      console.log(`[DailyReview] WMA applied: ${campaigns.length} campaigns from ${dailyInsights.length} daily rows`);
+    }
+  } catch (err) {
+    console.warn(`[DailyReview] WMA fetch failed (non-blocking): ${err.message}`);
   }
 
-  // 3. 캠페인 스키마로 매핑
-  const campaigns = insights7d.map((i) => mapAccountInsightToSchema(i, "7d"));
+  // Fallback: 기존 7일 집계 방식
+  if (!campaigns || campaigns.length === 0) {
+    console.log(`[DailyReview] Using 7d aggregate fallback`);
+    const { data: insights7d, error: err7d } = await fetchAccountInsights(creds.access_token, creds.selected_ad_account_id, "7d");
+    if (err7d || !insights7d?.length) {
+      console.warn(`[DailyReview] Failed to fetch 7d insights: ${err7d || "no data"}`);
+      return { run_id: null, total_campaigns: 0, actions_generated: 0, actions: [], skipped: true, reason: err7d || "no_insights" };
+    }
+    campaigns = insights7d.map((i) => mapAccountInsightToSchema(i, "7d"));
+  }
 
   // 4. 원가 데이터 조인
   const costs = db.prepare("SELECT campaign_name, cost_price FROM product_costs").all();
@@ -69,6 +118,16 @@ export async function runDailyReview() {
 
   // 5. 캠페인 판정 (7일 기간 기준 벤치마크 적용)
   const { judgments, summary } = judgeAllCampaigns(campaigns, "7d");
+
+  // 5b. WMA 추세 데이터를 판정 결과에 연결
+  if (wmaApplied) {
+    const trendMap = Object.fromEntries(
+      campaigns.map((c) => [c.meta_campaign_id, c._wma_trend || "flat"])
+    );
+    for (const j of judgments) {
+      j._wma_trend = trendMap[j.campaign_id] || "flat";
+    }
+  }
 
   // 6. 일 예산 정보 가져오기 (Meta API에서)
   const dailyBudgets = await fetchDailyBudgets(creds.access_token, campaigns);
@@ -308,8 +367,9 @@ function generateActions(judgments, dailyBudgets) {
     // ─── 액션 우선순위: 같은 캠페인에 여러 규칙 매칭 시 가장 효과적인 액션 선택 ───
     if (campaignActions.length === 0) continue;
 
+    let selectedAction;
     if (campaignActions.length === 1) {
-      allActions.push(campaignActions[0]);
+      selectedAction = campaignActions[0];
     } else {
       // 학습 데이터가 있으면 success_rate로 정렬, 없으면 첫 번째 (우선순위 순)
       const sorted = campaignActions.sort((a, b) => {
@@ -321,8 +381,21 @@ function generateActions(judgments, dailyBudgets) {
         if (bRate >= 0) return 1;
         return 0; // 둘 다 학습 데이터 없으면 원래 순서 유지 (우선순위 순)
       });
-      allActions.push(sorted[0]);
+      selectedAction = sorted[0];
     }
+
+    // WMA 추세 정보 부착
+    const trend = j._wma_trend || null;
+    if (trend) {
+      selectedAction.trend_direction = trend;
+      if (trend === "improving") {
+        selectedAction.reason += " 📈 [추세: 개선 중]";
+      } else if (trend === "declining") {
+        selectedAction.reason += " 📉 [추세: 하락 중]";
+      }
+    }
+
+    allActions.push(selectedAction);
   }
 
   return allActions;
@@ -399,8 +472,8 @@ function saveActions(db, runId, actions) {
       review_run_id, campaign_name, meta_campaign_id, action_type,
       current_value, proposed_value, reason, verdict, score, adset_id,
       recommendations_json, funnel_diagnosis_json, smart_recommendations_json,
-      benchmark_comparison_json, profitability_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      benchmark_comparison_json, profitability_json, trend_direction
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   let skipped = 0;
   const insertMany = db.transaction((items) => {
@@ -420,6 +493,7 @@ function saveActions(db, runId, actions) {
         a.smart_recommendations?.length ? JSON.stringify(a.smart_recommendations) : null,
         a.benchmark_comparison ? JSON.stringify(a.benchmark_comparison) : null,
         a.profitability ? JSON.stringify(a.profitability) : null,
+        a.trend_direction || null,
       );
     }
   });
