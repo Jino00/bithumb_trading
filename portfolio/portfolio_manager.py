@@ -276,7 +276,7 @@ class PortfolioManager:
                 )
 
             # 5. TradingBot 생성 (지연 임포트)
-            from main import TradingBot
+            from bot.trading_bot import TradingBot
             bot = TradingBot(
                 client=self.client,
                 strategy=live_strategy,
