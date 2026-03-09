@@ -54,7 +54,27 @@ class TradeAnalyzer:
 
     def __init__(self, trades: List[Dict[str, Any]]) -> None:
         self.trades = [t for t in trades if t.get("pnl_pct") is not None]
+        self._apply_recency_weights()
         logger.info(f"TradeAnalyzer 초기화: {len(self.trades)}건 완료 거래")
+
+    def _apply_recency_weights(self) -> None:
+        """거래를 시간순 정렬 후 최근 거래에 높은 가중치를 부여한다."""
+        if not self.trades:
+            return
+
+        # timestamp로 정렬 (오래된 → 최신)
+        self.trades.sort(
+            key=lambda t: t.get("entry_time") or t.get("timestamp") or ""
+        )
+
+        n = len(self.trades)
+        min_w = config.ANALYSIS_RECENCY_MIN_WEIGHT
+        for i, t in enumerate(self.trades):
+            if n == 1:
+                t["_weight"] = 1.0
+            else:
+                # 선형 보간: 가장 오래된=min_w, 최신=1.0
+                t["_weight"] = round(min_w + (1.0 - min_w) * i / (n - 1), 4)
 
     # ── 공개 메서드 ────────────────────────────────────────
 
@@ -179,8 +199,11 @@ class TradeAnalyzer:
     # ── 기본 지표 계산 ─────────────────────────────────────
 
     def _win_rate(self) -> float:
-        wins = sum(1 for t in self.trades if t["pnl_pct"] > 0)
-        return round(wins / len(self.trades) * 100, 2) if self.trades else 0.0
+        if not self.trades:
+            return 0.0
+        w_wins = sum(t.get("_weight", 1.0) for t in self.trades if t["pnl_pct"] > 0)
+        w_total = sum(t.get("_weight", 1.0) for t in self.trades)
+        return round(w_wins / w_total * 100, 2) if w_total > 0 else 0.0
 
     def _avg_profit(self) -> float:
         profits = [t["pnl_pct"] for t in self.trades if t["pnl_pct"] > 0]
@@ -211,33 +234,44 @@ class TradeAnalyzer:
 
     # ── 다차원 분석 ────────────────────────────────────────
 
+    @staticmethod
+    def _weighted_bucket_stats(trades: List[Dict[str, Any]]) -> dict:
+        """가중 평균으로 버킷 통계를 계산하는 공통 헬퍼."""
+        if not trades:
+            return {"total": 0, "win_rate": 0.0, "avg_pnl": 0.0}
+        w_wins = sum(t.get("_weight", 1.0) for t in trades if t["pnl_pct"] > 0)
+        w_total = sum(t.get("_weight", 1.0) for t in trades)
+        w_pnl = sum(t["pnl_pct"] * t.get("_weight", 1.0) for t in trades)
+        return {
+            "total": len(trades),
+            "win_rate": round(w_wins / w_total * 100, 1) if w_total > 0 else 0.0,
+            "avg_pnl": round(w_pnl / w_total, 3) if w_total > 0 else 0.0,
+        }
+
     def _by_strategy(self) -> Dict[str, dict]:
-        """전략명별 승률, 거래 수, PF"""
-        buckets: Dict[str, list] = defaultdict(list)
+        """전략명별 가중 승률, 거래 수, PF"""
+        buckets: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         for t in self.trades:
             name = t.get("strategy_name") or "unknown"
-            buckets[name].append(t["pnl_pct"])
+            buckets[name].append(t)
 
         result = {}
-        for name, pnls in buckets.items():
-            wins = sum(1 for p in pnls if p > 0)
+        for name, trades in buckets.items():
+            stats = self._weighted_bucket_stats(trades)
+            pnls = [t["pnl_pct"] for t in trades]
             gp = sum(p for p in pnls if p > 0)
             gl = abs(sum(p for p in pnls if p < 0))
-            result[name] = {
-                "total": len(pnls),
-                "wins": wins,
-                "win_rate": round(wins / len(pnls) * 100, 1),
-                "profit_factor": round(gp / gl, 3) if gl > 0 else float("inf"),
-                "avg_pnl": round(sum(pnls) / len(pnls), 3),
-            }
+            stats["wins"] = sum(1 for p in pnls if p > 0)
+            stats["profit_factor"] = round(gp / gl, 3) if gl > 0 else float("inf")
+            result[name] = stats
         return result
 
     def _by_rsi_bucket(self) -> Dict[str, dict]:
         """
-        RSI 진입값을 5 단위 구간으로 나눠 구간별 승률 분석.
+        RSI 진입값을 5 단위 구간으로 나눠 구간별 가중 승률 분석.
         예: "25-30", "30-35", ...
         """
-        buckets: Dict[str, list] = defaultdict(list)
+        buckets: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         for t in self.trades:
             rsi = t.get("rsi_value")
             if rsi is None:
@@ -245,70 +279,53 @@ class TradeAnalyzer:
             lo = int(rsi // 5) * 5
             hi = lo + 5
             key = f"{lo:2d}-{hi:2d}"
-            buckets[key].append(t["pnl_pct"])
+            buckets[key].append(t)
 
         result = {}
-        for key, pnls in buckets.items():
-            wins = sum(1 for p in pnls if p > 0)
-            result[key] = {
-                "total": len(pnls),
-                "win_rate": round(wins / len(pnls) * 100, 1),
-                "avg_pnl": round(sum(pnls) / len(pnls), 3),
-            }
+        for key, trades in buckets.items():
+            result[key] = self._weighted_bucket_stats(trades)
         return result
 
     def _by_hour(self) -> Dict[int, dict]:
-        """매수 시간대(0~23시)별 승률 분포"""
-        buckets: Dict[int, list] = defaultdict(list)
+        """매수 시간대(0~23시)별 가중 승률 분포"""
+        buckets: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
         for t in self.trades:
             ts = t.get("entry_time") or ""
             try:
                 hour = int(ts[11:13])
             except (ValueError, IndexError):
                 continue
-            buckets[hour].append(t["pnl_pct"])
+            buckets[hour].append(t)
 
         result = {}
-        for h, pnls in buckets.items():
-            wins = sum(1 for p in pnls if p > 0)
-            result[h] = {
-                "total": len(pnls),
-                "wins": wins,
-                "win_rate": round(wins / len(pnls) * 100, 1),
-                "avg_pnl": round(sum(pnls) / len(pnls), 3),
-            }
+        for h, trades in buckets.items():
+            stats = self._weighted_bucket_stats(trades)
+            stats["wins"] = sum(1 for t in trades if t["pnl_pct"] > 0)
+            result[h] = stats
         return result
 
     def _by_trend(self) -> Dict[str, dict]:
-        """진입 시점 추세별 성과 (UPTREND / DOWNTREND / SIDEWAYS)"""
-        buckets: Dict[str, list] = defaultdict(list)
+        """진입 시점 추세별 가중 성과 (UPTREND / DOWNTREND / SIDEWAYS)"""
+        buckets: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         for t in self.trades:
             trend = t.get("trend") or "UNKNOWN"
-            buckets[trend].append(t["pnl_pct"])
+            buckets[trend].append(t)
 
         return {
-            trend: {
-                "total": len(pnls),
-                "win_rate": round(sum(1 for p in pnls if p > 0) / len(pnls) * 100, 1),
-                "avg_pnl": round(sum(pnls) / len(pnls), 3),
-            }
-            for trend, pnls in buckets.items()
+            trend: self._weighted_bucket_stats(trades)
+            for trend, trades in buckets.items()
         }
 
     def _by_volatility(self) -> Dict[str, dict]:
-        """진입 시점 변동성별 성과 (HIGH / MEDIUM / LOW)"""
-        buckets: Dict[str, list] = defaultdict(list)
+        """진입 시점 변동성별 가중 성과 (HIGH / MEDIUM / LOW)"""
+        buckets: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         for t in self.trades:
             vol = t.get("volatility") or "UNKNOWN"
-            buckets[vol].append(t["pnl_pct"])
+            buckets[vol].append(t)
 
         return {
-            vol: {
-                "total": len(pnls),
-                "win_rate": round(sum(1 for p in pnls if p > 0) / len(pnls) * 100, 1),
-                "avg_pnl": round(sum(pnls) / len(pnls), 3),
-            }
-            for vol, pnls in buckets.items()
+            vol: self._weighted_bucket_stats(trades)
+            for vol, trades in buckets.items()
         }
 
     def _exit_pattern(self) -> Dict[str, dict]:

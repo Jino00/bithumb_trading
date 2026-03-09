@@ -206,10 +206,12 @@ class TestAdaptiveEngineShouldBlock(unittest.TestCase):
 
     def setUp(self):
         self.strategy = RSIStrategy(14, 30, 70)
+        mock_log = MagicMock()
+        mock_log.load_state.return_value = None
         self.engine = AdaptiveEngine(
             strategy=self.strategy,
             trade_logger=MagicMock(),
-            learning_log=MagicMock(),
+            learning_log=mock_log,
             gate=MagicMock(),
             client=MagicMock(),
         )
@@ -242,10 +244,12 @@ class TestAdaptiveEngineGetTradeAmount(unittest.TestCase):
 
     def setUp(self):
         self.strategy = RSIStrategy(14, 30, 70)
+        mock_log = MagicMock()
+        mock_log.load_state.return_value = None
         self.engine = AdaptiveEngine(
             strategy=self.strategy,
             trade_logger=MagicMock(),
-            learning_log=MagicMock(),
+            learning_log=mock_log,
             gate=MagicMock(),
             client=MagicMock(),
         )

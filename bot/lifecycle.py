@@ -175,6 +175,12 @@ def startup(paper: bool = False) -> Optional[TradingBot]:
         max_mdd=config.MAX_DRAWDOWN_PCT,
         min_profit_factor=config.MIN_PROFIT_FACTOR,
     )
+    risk_manager = RiskManager(
+        stop_loss_pct=config.STOP_LOSS_PCT,
+        take_profit_pct=config.TAKE_PROFIT_PCT,
+        max_drawdown_pct=config.MAX_DRAWDOWN_PCT,
+    )
+
     learning_log = LearningLog(config.DB_PATH)
     adaptive_engine = AdaptiveEngine(
         strategy=live_strategy,
@@ -184,14 +190,9 @@ def startup(paper: bool = False) -> Optional[TradingBot]:
         client=client,
         notifier=notifier,
         coin=config.TRADE_COIN,
+        risk_manager=risk_manager,
     )
     logger.info("[Step 5] 적응형 학습 엔진 초기화 완료")
-
-    risk_manager = RiskManager(
-        stop_loss_pct=config.STOP_LOSS_PCT,
-        take_profit_pct=config.TAKE_PROFIT_PCT,
-        max_drawdown_pct=config.MAX_DRAWDOWN_PCT,
-    )
     live_monitor = LiveMonitor(
         window=config.LIVE_MONITOR_WINDOW,
         threshold=config.LIVE_WIN_RATE_THRESHOLD,

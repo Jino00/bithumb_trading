@@ -84,6 +84,22 @@ ADAPTIVE_DOWNTREND_WIN_RATE = 45.0       # 하락 추세 차단 기준 승률 %
 ADAPTIVE_HIGH_VOL_WIN_RATE = 40.0        # 고변동성 포지션 축소 기준 승률 %
 ADAPTIVE_CONSEC_LOSS_THRESHOLD = 5       # 연속 손실 포지션 축소 기준
 
+# ── 적응형 SL/TP 범위 ────────────────────────────────────
+ADAPTIVE_SL_MIN = 1.5                          # 최소 손절 %
+ADAPTIVE_SL_MAX = 5.0                          # 최대 손절 %
+ADAPTIVE_TP_MIN = 3.0                          # 최소 익절 %
+ADAPTIVE_TP_MAX = 8.0                          # 최대 익절 %
+ADAPTIVE_SL_STEP = 0.5                         # SL 조정 단위 %
+ADAPTIVE_TP_STEP = 0.5                         # TP 조정 단위 %
+
+# ── 적응 효과성 추적 ─────────────────────────────────────
+EFFECTIVENESS_MIN_TRADES_AFTER = 10            # 효과 판정 최소 거래 수
+EFFECTIVENESS_GOOD_DELTA = 2.0                 # 효과적: 승률 +2%p 이상
+EFFECTIVENESS_BAD_DELTA = -5.0                 # 비효과적: 승률 -5%p 이하
+
+# ── 분석 최근 거래 가중치 ─────────────────────────────────
+ANALYSIS_RECENCY_MIN_WEIGHT = 0.3              # 가장 오래된 거래 가중치
+
 # ── 멀티코인 포트폴리오 설정 ──────────────────────────────
 MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", "5"))              # 최대 동시 포지션 수
 PORTFOLIO_MDD_PCT = float(os.getenv("PORTFOLIO_MDD_PCT", "25.0")) # 포트폴리오 MDD 한도 %

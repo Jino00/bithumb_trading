@@ -17,10 +17,12 @@ import config
 from analyzer.analyzer import TradeAnalyzer
 from backtest.backtest_engine import BacktestEngine
 from backtest.data_fetcher import DataFetcher
+from learning.adaptation_memory import AdaptationMemory
 from learning.adaptation_rules import (
     AdaptationProposal,
     evaluate_all_rules,
 )
+from learning.effectiveness_tracker import EffectivenessTracker
 from learning.learning_log import LearningLog
 from logger.trade_logger import TradeLogger
 from strategy.base_strategy import BaseStrategy
@@ -36,6 +38,8 @@ class AdaptiveState:
     blocked_hours: Set[int] = field(default_factory=set)
     block_downtrend_buy: bool = False
     trade_amount_multiplier: float = 1.0
+    stop_loss_pct: Optional[float] = None   # None이면 config 기본값 사용
+    take_profit_pct: Optional[float] = None  # None이면 config 기본값 사용
     last_adaptation_time: Optional[datetime] = None
     adaptation_count: int = 0
 
@@ -44,6 +48,40 @@ class AdaptiveState:
         self.blocked_hours = set()
         self.block_downtrend_buy = False
         self.trade_amount_multiplier = 1.0
+        # SL/TP는 reset하지 않음 — 명시적 변경만 허용
+
+    def to_dict(self) -> dict:
+        """영속화를 위해 dict로 직렬화한다."""
+        return {
+            "blocked_hours": sorted(self.blocked_hours),
+            "block_downtrend_buy": self.block_downtrend_buy,
+            "trade_amount_multiplier": self.trade_amount_multiplier,
+            "stop_loss_pct": self.stop_loss_pct,
+            "take_profit_pct": self.take_profit_pct,
+            "adaptation_count": self.adaptation_count,
+            "last_adaptation_time": (
+                self.last_adaptation_time.isoformat()
+                if self.last_adaptation_time else None
+            ),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "AdaptiveState":
+        """dict에서 AdaptiveState를 복원한다."""
+        state = cls()
+        state.blocked_hours = set(data.get("blocked_hours", []))
+        state.block_downtrend_buy = data.get("block_downtrend_buy", False)
+        state.trade_amount_multiplier = data.get("trade_amount_multiplier", 1.0)
+        state.stop_loss_pct = data.get("stop_loss_pct")
+        state.take_profit_pct = data.get("take_profit_pct")
+        state.adaptation_count = data.get("adaptation_count", 0)
+        last_time = data.get("last_adaptation_time")
+        if last_time:
+            try:
+                state.last_adaptation_time = datetime.fromisoformat(last_time)
+            except (ValueError, TypeError):
+                state.last_adaptation_time = None
+        return state
 
 
 class AdaptiveEngine:
@@ -63,6 +101,7 @@ class AdaptiveEngine:
         client,
         notifier=None,
         coin: str = "BTC",
+        risk_manager=None,
     ) -> None:
         self.coin = coin
         self.strategy = strategy
@@ -71,16 +110,54 @@ class AdaptiveEngine:
         self.gate = gate
         self.client = client
         self.notifier = notifier
+        self.risk_manager = risk_manager
 
         self._state = AdaptiveState()
         self._pending_best_params: Optional[dict] = None
         self._pending_best_result: Optional[BacktestResult] = None
 
+        # 효과성 추적 + 장기 기억
+        self.effectiveness_tracker = EffectivenessTracker(learning_log)
+        self.adaptation_memory = AdaptationMemory(learning_log)
+
+        # DB에서 이전 학습 상태 복원
+        self._load_persisted_state()
         logger.info("[AdaptiveEngine] 초기화 완료")
 
     @property
     def state(self) -> AdaptiveState:
         return self._state
+
+    # ── 상태 영속화 ──────────────────────────────────────
+
+    def _load_persisted_state(self) -> None:
+        """DB에서 이전 학습 상태를 복원한다."""
+        try:
+            saved = self.learning_log.load_state(self.coin)
+            if saved:
+                self._state = AdaptiveState.from_dict(saved)
+                # SL/TP가 저장되어 있으면 risk_manager에도 반영
+                if self.risk_manager and self._state.stop_loss_pct:
+                    self.risk_manager.update_thresholds(
+                        stop_loss_pct=self._state.stop_loss_pct,
+                        take_profit_pct=self._state.take_profit_pct,
+                    )
+                logger.info(
+                    f"[AdaptiveEngine] 이전 상태 복원 완료: "
+                    f"blocked_hours={sorted(self._state.blocked_hours)} "
+                    f"adaptations={self._state.adaptation_count}"
+                )
+            else:
+                logger.info("[AdaptiveEngine] 저장된 상태 없음 — 기본값 사용")
+        except Exception as e:
+            logger.error(f"[AdaptiveEngine] 상태 복원 오류: {e}")
+
+    def _persist_state(self) -> None:
+        """현재 학습 상태를 DB에 저장한다."""
+        try:
+            self.learning_log.save_state(self.coin, self._state.to_dict())
+        except Exception as e:
+            logger.error(f"[AdaptiveEngine] 상태 저장 오류: {e}")
 
     # ── 외부 인터페이스 ────────────────────────────────────
 
@@ -138,10 +215,13 @@ class AdaptiveEngine:
         전체 적응 사이클을 실행한다.
 
         1. 최근 완료 거래 로드
-        2. TradeAnalyzer.analyze()
-        3. 4개 규칙 평가 → 제안 목록
-        4. 각 제안 검증 + 적용 + 로그
-        5. 알림 전송
+        2. 이전 적응의 효과 평가 (BEFORE→AFTER)
+        3. TradeAnalyzer.analyze()
+        4. 6개 규칙 평가 → 제안 목록
+        5. 장기 기억으로 실패 이력 필터링
+        6. 각 제안 검증 + 적용 + 로그
+        7. 적용된 적응의 BEFORE 스냅샷 저장
+        8. 상태 영속화
 
         Returns:
             처리된 AdaptationProposal 리스트
@@ -161,40 +241,63 @@ class AdaptiveEngine:
             )
             return []
 
-        # 2. 분석
+        # 2. 이전 적응의 효과 평가 + 장기 기억에 결과 저장
+        self._evaluate_previous_adaptations(trades)
+
+        # 3. 분석
         analyzer = TradeAnalyzer(trades)
         report = analyzer.analyze()
 
-        # 3. 필터 초기화 (매 사이클마다 재계산)
+        # 4. 필터 초기화 (매 사이클마다 재계산)
         self._state.reset_filters()
 
-        # 4. 규칙 평가
+        # 5. 규칙 평가
         proposals = evaluate_all_rules(
             report=report,
             current_strategy=self.strategy,
             best_params=self._pending_best_params,
             best_result=self._pending_best_result,
+            current_sl=self.get_stop_loss_pct(),
+            current_tp=self.get_take_profit_pct(),
         )
 
         if not proposals:
             logger.info("[AdaptiveEngine] 적응 제안 없음 — 현재 설정 유지")
             self._state.last_adaptation_time = datetime.now()
+            self._persist_state()
             return []
 
-        # 5. 각 제안 처리
+        # 6. 장기 기억으로 실패 이력 필터링
+        proposals = self.adaptation_memory.filter_proposals(
+            coin=self.coin, proposals=proposals
+        )
+
+        if not proposals:
+            logger.info("[AdaptiveEngine] 장기 기억 필터 후 제안 없음")
+            self._state.last_adaptation_time = datetime.now()
+            self._persist_state()
+            return []
+
+        # 7. 각 제안 처리
         applied_proposals = []
         for proposal in proposals:
             success = self._process_proposal(proposal)
             if success:
                 applied_proposals.append(proposal)
 
-        # 6. 상태 업데이트
+        # 8. 적용된 적응의 BEFORE 스냅샷 저장
+        self._snapshot_applied_adaptations(trades)
+
+        # 9. 상태 업데이트
         self._state.last_adaptation_time = datetime.now()
         self._state.adaptation_count += len(applied_proposals)
 
-        # 7. 그리드서치 결과 소비 (적용 여부와 관계없이 클리어)
+        # 10. 그리드서치 결과 소비 (적용 여부와 관계없이 클리어)
         self._pending_best_params = None
         self._pending_best_result = None
+
+        # 11. 상태 영속화 (재시작 시 복원용)
+        self._persist_state()
 
         logger.info(
             f"[AdaptiveEngine] ═══ 적응 사이클 완료 ═══ "
@@ -309,17 +412,19 @@ class AdaptiveEngine:
     def _apply_proposal(self, proposal: AdaptationProposal) -> bool:
         """제안을 실제로 적용한다."""
         try:
-            if proposal.adaptation_type == "PARAM_TUNE":
-                return self._apply_param_tune(proposal)
-            elif proposal.adaptation_type == "TIME_FILTER":
-                return self._apply_time_filter(proposal)
-            elif proposal.adaptation_type == "TREND_FILTER":
-                return self._apply_trend_filter(proposal)
-            elif proposal.adaptation_type == "POSITION_SIZE":
-                return self._apply_position_size(proposal)
-            else:
-                logger.warning(f"알 수 없는 적응 유형: {proposal.adaptation_type}")
-                return False
+            handlers = {
+                "PARAM_TUNE": self._apply_param_tune,
+                "TIME_FILTER": self._apply_time_filter,
+                "TREND_FILTER": self._apply_trend_filter,
+                "POSITION_SIZE": self._apply_position_size,
+                "EXIT_STRATEGY": self._apply_exit_strategy,
+                "RSI_TUNE": self._apply_rsi_tune,
+            }
+            handler = handlers.get(proposal.adaptation_type)
+            if handler:
+                return handler(proposal)
+            logger.warning(f"알 수 없는 적응 유형: {proposal.adaptation_type}")
+            return False
         except Exception as e:
             logger.error(f"[AdaptiveEngine] 적용 오류: {e}")
             return False
@@ -368,6 +473,99 @@ class AdaptiveEngine:
         logger.info(f"[POSITION_SIZE] 포지션 배율: {new_mult:.2f}x")
         return True
 
+    def _apply_exit_strategy(self, proposal: AdaptationProposal) -> bool:
+        """손절/익절 비율을 적응형으로 변경한다."""
+        new_sl = proposal.after_value.get("stop_loss_pct")
+        new_tp = proposal.after_value.get("take_profit_pct")
+
+        if new_sl is not None:
+            new_sl = max(config.ADAPTIVE_SL_MIN,
+                         min(config.ADAPTIVE_SL_MAX, new_sl))
+            self._state.stop_loss_pct = new_sl
+
+        if new_tp is not None:
+            new_tp = max(config.ADAPTIVE_TP_MIN,
+                         min(config.ADAPTIVE_TP_MAX, new_tp))
+            self._state.take_profit_pct = new_tp
+
+        # risk_manager에도 반영
+        if self.risk_manager:
+            self.risk_manager.update_thresholds(
+                stop_loss_pct=self._state.stop_loss_pct,
+                take_profit_pct=self._state.take_profit_pct,
+            )
+
+        logger.info(
+            f"[EXIT_STRATEGY] SL={self._state.stop_loss_pct}% "
+            f"TP={self._state.take_profit_pct}%"
+        )
+        return True
+
+    def _apply_rsi_tune(self, proposal: AdaptationProposal) -> bool:
+        """RSI 파라미터를 실전 데이터 기반으로 미세 조정한다."""
+        new = proposal.after_value
+        target = self._get_rsi_strategy()
+
+        if "oversold" in new:
+            target.oversold = new["oversold"]
+        if "overbought" in new:
+            target.overbought = new["overbought"]
+
+        logger.info(
+            f"[RSI_TUNE] RSI 미세 조정: "
+            f"oversold={target.oversold} overbought={target.overbought}"
+        )
+        return True
+
+    # ── 효과성 추적 + 장기 기억 ────────────────────────────
+
+    def _evaluate_previous_adaptations(self, trades: list) -> None:
+        """이전 적응들의 AFTER 스냅샷을 찍고 장기 기억에 결과를 저장한다."""
+        try:
+            results = self.effectiveness_tracker.evaluate_pending(
+                coin=self.coin, trades=trades
+            )
+            if results:
+                adaptations = self.learning_log.get_recent_adaptations(limit=50)
+                self.adaptation_memory.record_outcomes_from_evaluation(
+                    coin=self.coin,
+                    evaluation_results=results,
+                    adaptations=adaptations,
+                )
+                logger.info(
+                    f"[AdaptiveEngine] 이전 적응 {len(results)}건 효과 평가 완료"
+                )
+        except Exception as e:
+            logger.error(f"[AdaptiveEngine] 효과성 평가 오류: {e}")
+
+    def _snapshot_applied_adaptations(self, trades: list) -> None:
+        """방금 적용된 적응들의 BEFORE 스냅샷을 저장한다."""
+        try:
+            recent = self.learning_log.get_recent_adaptations(limit=10)
+            for adapt in recent:
+                if adapt.get("applied") == 1:
+                    self.effectiveness_tracker.snapshot_before(
+                        adaptation_id=adapt["id"],
+                        coin=self.coin,
+                        trades=trades,
+                    )
+        except Exception as e:
+            logger.error(f"[AdaptiveEngine] BEFORE 스냅샷 오류: {e}")
+
+    # ── SL/TP 조회 ───────────────────────────────────────
+
+    def get_stop_loss_pct(self) -> float:
+        """적응형 손절 비율을 반환한다. None이면 config 기본값."""
+        if self._state.stop_loss_pct is not None:
+            return self._state.stop_loss_pct
+        return config.STOP_LOSS_PCT
+
+    def get_take_profit_pct(self) -> float:
+        """적응형 익절 비율을 반환한다. None이면 config 기본값."""
+        if self._state.take_profit_pct is not None:
+            return self._state.take_profit_pct
+        return config.TAKE_PROFIT_PCT
+
     # ── 알림 ───────────────────────────────────────────────
 
     def _notify_adaptation(
@@ -395,6 +593,8 @@ class AdaptiveEngine:
             "blocked_hours": sorted(self._state.blocked_hours),
             "block_downtrend_buy": self._state.block_downtrend_buy,
             "trade_amount_multiplier": self._state.trade_amount_multiplier,
+            "stop_loss_pct": self.get_stop_loss_pct(),
+            "take_profit_pct": self.get_take_profit_pct(),
             "total_adaptations": self._state.adaptation_count,
             "last_adaptation": (
                 self._state.last_adaptation_time.isoformat()

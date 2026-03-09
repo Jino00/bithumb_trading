@@ -273,6 +273,7 @@ class PortfolioManager:
                     client=self.client,
                     notifier=self.notifier,
                     coin=coin,
+                    risk_manager=risk_manager,
                 )
 
             # 5. TradingBot 생성 (지연 임포트)

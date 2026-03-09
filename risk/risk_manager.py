@@ -36,6 +36,23 @@ class RiskManager:
         self._peak_equity: float = 1.0
         self._trade_history: List[float] = []  # pnl_pct 목록
 
+    # ── 적응형 임계값 변경 ────────────────────────────────
+
+    def update_thresholds(
+        self,
+        stop_loss_pct: Optional[float] = None,
+        take_profit_pct: Optional[float] = None,
+    ) -> None:
+        """적응형 학습 엔진에서 호출 — SL/TP 비율을 동적으로 변경한다."""
+        if stop_loss_pct is not None:
+            old_sl = self.stop_loss_pct
+            self.stop_loss_pct = stop_loss_pct
+            logger.info(f"[Risk] SL 변경: {old_sl}% → {stop_loss_pct}%")
+        if take_profit_pct is not None:
+            old_tp = self.take_profit_pct
+            self.take_profit_pct = take_profit_pct
+            logger.info(f"[Risk] TP 변경: {old_tp}% → {take_profit_pct}%")
+
     # ── 포지션 추적 ────────────────────────────────────────
 
     def record_trade(self, side: str, price: float) -> None:

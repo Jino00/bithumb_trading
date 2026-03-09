@@ -223,9 +223,19 @@ class TradingBot:
         """청산 조건 확인 후 매도 실행"""
         pnl_pct = (current_price - self._entry_price) / self._entry_price * 100
 
+        # 적응형 SL/TP 우선 사용, 없으면 config 기본값
+        sl_pct = (
+            self.adaptive_engine.get_stop_loss_pct()
+            if self.adaptive_engine else config.STOP_LOSS_PCT
+        )
+        tp_pct = (
+            self.adaptive_engine.get_take_profit_pct()
+            if self.adaptive_engine else config.TAKE_PROFIT_PCT
+        )
+
         should_exit = (
-            pnl_pct <= -config.STOP_LOSS_PCT
-            or pnl_pct >= config.TAKE_PROFIT_PCT
+            pnl_pct <= -sl_pct
+            or pnl_pct >= tp_pct
             or ctx.signal == "SELL"
         )
         if not should_exit:
@@ -234,8 +244,8 @@ class TradingBot:
         exit_reason = RSIStrategy.build_exit_reason(
             rsi=ctx.rsi_value if ctx.signal == "SELL" else None,
             pnl_pct=pnl_pct,
-            stop_loss_pct=config.STOP_LOSS_PCT,
-            take_profit_pct=config.TAKE_PROFIT_PCT,
+            stop_loss_pct=sl_pct,
+            take_profit_pct=tp_pct,
             overbought=self.strategy.overbought,
         )
         hold_minutes = (
