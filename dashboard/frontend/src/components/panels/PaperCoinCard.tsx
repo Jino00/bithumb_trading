@@ -57,7 +57,18 @@ export default function PaperCoinCard({ slot }: Props) {
       {/* KPI 행 */}
       <div className="grid grid-cols-2 gap-2 mb-3">
         <div>
-          <div className="text-xs text-text-secondary">자본</div>
+          <div className="text-xs text-text-secondary">
+            자본
+            {slot.allocation_weight !== 1.0 && (
+              <span className={`ml-1 px-1 py-0.5 rounded text-[10px] font-medium ${
+                slot.allocation_weight >= 1.0
+                  ? 'bg-profit/10 text-profit'
+                  : 'bg-yellow-500/10 text-yellow-400'
+              }`}>
+                ×{slot.allocation_weight.toFixed(2)}
+              </span>
+            )}
+          </div>
           <div className="text-sm font-medium">
             {slot.balance_krw.toLocaleString()}원
           </div>

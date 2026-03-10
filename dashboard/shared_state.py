@@ -486,6 +486,7 @@ def _build_paper_portfolio_state(manager) -> dict:
             "position": pos_info,
             "draining": slot.draining,
             "activated_at": slot.activated_at.isoformat(timespec="seconds"),
+            "allocation_weight": round(slot.allocation_weight, 2),
         })
 
     # 전체 거래 이력 (최근 200건)

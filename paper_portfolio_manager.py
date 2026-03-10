@@ -30,7 +30,8 @@ class PaperCoinSlot:
     trader: AdaptivePaperTrader
     allocated_krw: float
     activated_at: datetime
-    draining: bool = False        # True → 신규 진입 차단, 포지션 청산 후 제거
+    allocation_weight: float = 1.0  # 배분 가중치 (0.5~1.8)
+    draining: bool = False          # True → 신규 진입 차단, 포지션 청산 후 제거
     drain_reason: str = ""
 
 
@@ -104,10 +105,16 @@ class PaperPortfolioManager:
             print("[오류] 활성화된 코인이 없습니다")
             return False
 
+        # 가중치 기반 재배분
+        print(f"\n[배분] 전략 품질 + 변동폭 기반 스마트 배분")
+        self._rebalance_allocations()
+
         print(f"\n[시작] {activated}개 코인 활성화 완료")
         for coin, slot in self._slots.items():
             strategy = slot.trader._active_strategy_name
-            print(f"  {coin}: {strategy} (자본: {slot.allocated_krw:,.0f}원)")
+            print(f"  {coin}: {strategy} | "
+                  f"×{slot.allocation_weight:.2f} → "
+                  f"{slot.allocated_krw:,.0f}원")
 
         PaperStateWriter.update_portfolio(self)
         return True
@@ -231,6 +238,64 @@ class PaperPortfolioManager:
                           f"(변동폭: {score.range_pct:.1f}%, "
                           f"거래대금: {score.volume_krw / 1e8:.0f}억원)")
 
+    # ── 자본 배분 ─────────────────────────────────────────────
+
+    def _calc_allocation_weight(
+        self, score: CoinScore, trader: AdaptivePaperTrader
+    ) -> float:
+        """전략 품질 + 변동폭 기반 가중치 계산 (0.5~1.8).
+
+        robust_score()는 일반적으로 -50~+50 범위이며, 30+ 이면 우수.
+        """
+        best = trader._last_eval.best if trader._last_eval else None
+
+        # 전략 점수 정규화 (0~1, 30점을 1.0으로 클램프)
+        raw_score = best.score if best else 0
+        quality = min(1.0, max(0.0, raw_score) / 30.0)
+
+        # 변동폭 정규화 (10%를 1.0으로)
+        vol_norm = min(score.range_pct / 10.0, 1.0)
+
+        # 복합 가중치 (전략 70% + 변동폭 30%)
+        raw = (config.ALLOC_QUALITY_WEIGHT * quality
+               + config.ALLOC_VOLATILITY_WEIGHT * vol_norm)
+
+        # 거래 수 신뢰도 보정 (20건 미만이면 감소)
+        trades = best.trades_count if best else 0
+        confidence = min(1.0, trades / config.ALLOC_CONFIDENCE_TRADES)
+        adjusted = raw * (0.6 + 0.4 * confidence)
+
+        return max(config.ALLOC_MIN_WEIGHT,
+                   min(config.ALLOC_MAX_WEIGHT, adjusted))
+
+    def _rebalance_allocations(self) -> None:
+        """활성 슬롯들의 자본을 가중치 비례로 재배분한다."""
+        if not self._slots:
+            return
+
+        # 전체 배분 가능 자본
+        total = self._unallocated_krw
+        for slot in self._slots.values():
+            total += slot.trader._balance_krw
+        self._unallocated_krw = 0.0
+
+        # 가중치 합 계산
+        weight_sum = sum(s.allocation_weight for s in self._slots.values())
+        if weight_sum <= 0:
+            weight_sum = len(self._slots)
+
+        # 가중치 비례 재배분
+        for coin, slot in self._slots.items():
+            new_alloc = total * (slot.allocation_weight / weight_sum)
+            old_balance = slot.trader._balance_krw
+            slot.trader._balance_krw = new_alloc
+            slot.allocated_krw = new_alloc
+            if self._verbose:
+                diff = new_alloc - old_balance
+                print(f"  [{coin}] 재배분: {old_balance:,.0f} → "
+                      f"{new_alloc:,.0f}원 (×{slot.allocation_weight:.2f}, "
+                      f"{diff:+,.0f}원)")
+
     # ── 코인 관리 ─────────────────────────────────────────────
 
     def _try_activate(self, score: CoinScore) -> bool:
@@ -263,13 +328,15 @@ class PaperPortfolioManager:
             self._add_blacklist(coin, "양호한 전략 없음")
             return False
 
-        # 슬롯 등록
+        # 가중치 계산 + 슬롯 등록
+        weight = self._calc_allocation_weight(score, trader)
         self._unallocated_krw -= allocation
         self._slots[coin] = PaperCoinSlot(
             coin=coin,
             trader=trader,
             allocated_krw=allocation,
             activated_at=datetime.now(),
+            allocation_weight=weight,
         )
         return True
 
@@ -389,12 +456,12 @@ class PaperPortfolioManager:
         for coin, slot in self._slots.items():
             t = slot.trader
             bal = t._balance_krw
-            ret = ((bal / slot.allocated_krw) - 1) * 100
+            ret = ((bal / slot.allocated_krw) - 1) * 100 if slot.allocated_krw > 0 else 0
             status = "DRAIN" if slot.draining else t._active_strategy_name
             pos_str = ""
             if t._position:
                 pos_str = f" [보유: {t._position.entry_price:,.0f}원]"
-            print(f"  {coin:>6} | {status:<16} | "
+            print(f"  {coin:>6} | {status:<16} | ×{slot.allocation_weight:.2f} | "
                   f"{bal:>12,.0f}원 ({ret:+6.2f}%){pos_str}")
         print(f"{'─' * 60}")
 

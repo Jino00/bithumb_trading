@@ -223,6 +223,7 @@ class PaperCoinSlotInfo(BaseModel):
     position: Optional[PaperPositionInfo] = None
     draining: bool = False
     activated_at: Optional[str] = None
+    allocation_weight: float = 1.0
 
 
 class PaperPortfolioKPI(BaseModel):

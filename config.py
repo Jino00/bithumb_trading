@@ -117,6 +117,13 @@ SCAN_INTERVAL_MINUTES = 30                                        # 스크리너
 PAPER_SCAN_INTERVAL_MINUTES = int(os.getenv("PAPER_SCAN_INTERVAL_MINUTES", "30"))  # 페이퍼 스캔 주기
 BLACKLIST_TTL_HOURS = 24                                          # 게이트 실패 코인 차단 시간
 
+# ── 스마트 자본 배분 ────────────────────────────────────────────
+ALLOC_QUALITY_WEIGHT = 0.7       # 전략 품질 가중 (robust_score 기반)
+ALLOC_VOLATILITY_WEIGHT = 0.3    # 코인 변동폭 가중 (range_pct 기반)
+ALLOC_MIN_WEIGHT = 0.5           # 최소 배분 가중치 (균등 대비 50%)
+ALLOC_MAX_WEIGHT = 1.8           # 최대 배분 가중치 (균등 대비 180%)
+ALLOC_CONFIDENCE_TRADES = 20     # 신뢰도 기준 거래 수
+
 # ── 스크리너 설정 ────────────────────────────────────────────
 SCREENER_MIN_VOLUME_KRW = float(os.getenv("SCREENER_MIN_VOLUME_KRW", "1000000000"))  # 10억원
 SCREENER_MIN_RANGE_PCT = float(os.getenv("SCREENER_MIN_RANGE_PCT", "2.0"))

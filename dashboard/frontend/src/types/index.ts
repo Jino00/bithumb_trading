@@ -195,6 +195,7 @@ export interface PaperCoinSlotInfo {
   position: PaperPositionInfo | null;
   draining: boolean;
   activated_at: string | null;
+  allocation_weight: number;
 }
 
 export interface PaperPortfolioKPI {
