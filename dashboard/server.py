@@ -8,8 +8,9 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 import config
@@ -66,10 +67,24 @@ app.include_router(paper_router, prefix="/api/paper", tags=["paper"])
 app.include_router(ws_router, prefix="/ws", tags=["websocket"])
 
 
-# ── 정적 파일 서빙 (프로덕션) ────────────────────────────────────
+# ── 정적 파일 서빙 (프로덕션, SPA catch-all) ──────────────────────
 
 if FRONTEND_DIST.exists():
-    app.mount("/", StaticFiles(directory=str(FRONTEND_DIST), html=True))
+    # 정적 에셋 (JS/CSS/이미지) — /assets 경로
+    app.mount(
+        "/assets",
+        StaticFiles(directory=str(FRONTEND_DIST / "assets")),
+        name="assets",
+    )
+
+    # SPA catch-all: API/WS/assets 외 모든 경로 → index.html
+    @app.get("/{full_path:path}")
+    async def spa_catch_all(request: Request, full_path: str):
+        """React Router 클라이언트 사이드 라우팅 지원."""
+        file_path = FRONTEND_DIST / full_path
+        if file_path.is_file():
+            return FileResponse(file_path)
+        return FileResponse(FRONTEND_DIST / "index.html")
 
 
 # ── 실행 헬퍼 ────────────────────────────────────────────────────
