@@ -91,9 +91,8 @@ class ScalpStrategy(BaseStrategy):
         if df is None or len(df) < 60:
             return ScalpSignalContext("HOLD", "데이터 부족", "NONE", "UNKNOWN")
 
-        # 레짐 감지
-        regime_detail = self.regime_detector.detect(df)
-        regime = regime_detail.regime
+        # 레짐 감지 (detect()는 MarketRegime enum 반환)
+        regime = self.regime_detector.detect(df)
 
         if regime == MarketRegime.TRENDING_DOWN:
             return self._signal_s5_bear_bounce(df)

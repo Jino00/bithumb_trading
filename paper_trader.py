@@ -474,6 +474,12 @@ class AdaptivePaperTrader:
             df = self._client.get_ohlcv(self._coin, interval="1h", count=count)
             if df is None or len(df) < 60:
                 return None
+            # 날짜 인덱스 → datetime 컬럼 (backtest_scalp 호환)
+            df = df.reset_index()
+            if "time" in df.columns:
+                df.rename(columns={"time": "datetime"}, inplace=True)
+            elif "index" in df.columns:
+                df.rename(columns={"index": "datetime"}, inplace=True)
             df = df.reset_index(drop=True)
             return df
         except Exception as e:
