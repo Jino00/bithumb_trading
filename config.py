@@ -114,6 +114,7 @@ MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", "5"))              # 최대 동�
 PORTFOLIO_MDD_PCT = float(os.getenv("PORTFOLIO_MDD_PCT", "25.0")) # 포트폴리오 MDD 한도 %
 PER_COIN_ALLOCATION_PCT = 100.0 / MAX_POSITIONS                   # 코인당 자본 비율 % (자동 계산)
 SCAN_INTERVAL_MINUTES = 30                                        # 스크리너 주기 (분)
+PAPER_SCAN_INTERVAL_MINUTES = int(os.getenv("PAPER_SCAN_INTERVAL_MINUTES", "30"))  # 페이퍼 스캔 주기
 BLACKLIST_TTL_HOURS = 24                                          # 게이트 실패 코인 차단 시간
 
 # ── 스크리너 설정 ────────────────────────────────────────────

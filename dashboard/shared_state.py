@@ -251,6 +251,15 @@ class PaperStateWriter:
         except Exception as e:
             logger.error(f"PaperState 기록 실패: {e}")
 
+    @staticmethod
+    def update_portfolio(manager) -> None:
+        """PaperPortfolioManager 상태를 paper_state.json에 기록한다."""
+        try:
+            state = _build_paper_portfolio_state(manager)
+            _atomic_write(state, PAPER_STATE_PATH)
+        except Exception as e:
+            logger.error(f"PaperPortfolioState 기록 실패: {e}")
+
 
 class PaperStateReader:
     """FastAPI 서버가 호출 — paper_state.json에서 페이퍼 트레이딩 상태를 읽는다."""
@@ -386,6 +395,148 @@ def _build_paper_state(trader) -> dict:
         "kpi": kpi,
         "position": position,
         "eval_scores": eval_scores,
+        "triggers": triggers,
+        "trades": trades,
+        "equity_curve": equity_curve,
+    }
+
+
+def _build_paper_portfolio_state(manager) -> dict:
+    """PaperPortfolioManager → 대시보드용 JSON dict 변환 (멀티코인)."""
+    total_value = manager.portfolio_total_value()
+    all_trades = manager.all_trades()
+    total_trades = len(all_trades)
+    wins = sum(1 for t in all_trades if t.pnl_krw > 0)
+    win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+    total_return_pct = (
+        (total_value - manager._initial_capital)
+        / manager._initial_capital * 100
+        if manager._initial_capital > 0 else 0
+    )
+
+    # 포트폴리오 수준 KPI
+    portfolio_kpi = {
+        "total_value": round(total_value, 0),
+        "initial_capital": round(manager._initial_capital, 0),
+        "unallocated_krw": round(manager._unallocated_krw, 0),
+        "total_return_pct": round(total_return_pct, 2),
+        "total_trades": total_trades,
+        "win_rate": round(win_rate, 1),
+        "active_coins": [c for c, s in manager._slots.items() if not s.draining],
+        "max_positions": manager._max_positions,
+        "scan_count": manager._scan_count,
+        "blacklist": list(manager._blacklist.keys()),
+    }
+
+    # 합산 KPI (하위 호환)
+    kpi = {
+        "balance": round(total_value - sum(
+            s.trader._position.quantity * s.trader._position.entry_price
+            for s in manager._slots.values() if s.trader._position
+        ), 0),
+        "total_value": round(total_value, 0),
+        "initial_capital": round(manager._initial_capital, 0),
+        "total_return_pct": round(total_return_pct, 2),
+        "total_trades": total_trades,
+        "win_rate": round(win_rate, 1),
+        "active_strategy_id": "",
+        "active_strategy_name": "PORTFOLIO",
+        "regime": "MIXED",
+        "coin": "MULTI",
+        "cycle_count": manager._cycle_count,
+    }
+
+    # 각 코인 슬롯 정보
+    positions = []
+    for coin, slot in manager._slots.items():
+        t = slot.trader
+        t_wins = sum(1 for tr in t._trades if tr.pnl_krw > 0)
+        t_total = len(t._trades)
+        t_wr = (t_wins / t_total * 100) if t_total > 0 else 0
+        t_val = t._balance_krw
+        if t._position:
+            t_val += t._position.quantity * t._position.entry_price
+        t_ret = ((t_val / slot.allocated_krw) - 1) * 100 if slot.allocated_krw > 0 else 0
+
+        pos_info = None
+        if t._position:
+            pos = t._position
+            pos_info = {
+                "coin": pos.coin,
+                "entry_price": round(pos.entry_price, 0),
+                "quantity": pos.quantity,
+                "entry_time": pos.entry_time,
+                "sl_pct": pos.sl_pct,
+                "tp_pct": pos.tp_pct,
+                "strategy": pos.strategy,
+                "invested_krw": round(pos.invested_krw, 0),
+            }
+
+        positions.append({
+            "coin": coin,
+            "allocated_krw": round(slot.allocated_krw, 0),
+            "balance_krw": round(t._balance_krw, 0),
+            "active_strategy_id": t._active_strategy_id,
+            "active_strategy_name": t._active_strategy_name,
+            "regime": t._monitor.current_regime,
+            "cycle_count": t._cycle_count,
+            "total_trades": t_total,
+            "win_rate": round(t_wr, 1),
+            "total_return_pct": round(t_ret, 2),
+            "position": pos_info,
+            "draining": slot.draining,
+            "activated_at": slot.activated_at.isoformat(timespec="seconds"),
+        })
+
+    # 전체 거래 이력 (최근 200건)
+    trades = []
+    for t in all_trades[-200:]:
+        trades.append({
+            "entry_time": t.entry_time,
+            "exit_time": t.exit_time,
+            "strategy": t.strategy,
+            "entry_price": round(t.entry_price, 0),
+            "exit_price": round(t.exit_price, 0),
+            "quantity": t.quantity,
+            "pnl_krw": round(t.pnl_krw, 0),
+            "pnl_pct": round(t.pnl_pct, 2),
+            "exit_reason": t.exit_reason,
+            "invested_krw": round(t.invested_krw, 0),
+            "coin": t.coin,
+        })
+
+    # 전체 트리거 (최근 100건)
+    triggers = []
+    for slot in manager._slots.values():
+        for tr in slot.trader._monitor.trigger_history[-20:]:
+            triggers.append({
+                "timestamp": getattr(tr, "timestamp", ""),
+                "trigger_type": tr.trigger_type.value,
+                "severity": tr.severity,
+                "description": f"[{slot.coin}] {tr.description}",
+                "old_value": tr.old_value,
+                "new_value": tr.new_value,
+            })
+    triggers = triggers[-100:]
+
+    # 자본 곡선 (합산)
+    equity_curve = []
+    running = manager._initial_capital
+    for t in all_trades:
+        running += t.pnl_krw
+        equity_curve.append({
+            "timestamp": t.exit_time,
+            "balance": round(running, 0),
+        })
+
+    return {
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "mode": "MULTI",
+        "kpi": kpi,
+        "portfolio_kpi": portfolio_kpi,
+        "position": None,
+        "positions": positions,
+        "eval_scores": [],
         "triggers": triggers,
         "trades": trades,
         "equity_curve": equity_curve,

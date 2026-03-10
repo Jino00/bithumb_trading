@@ -13,6 +13,7 @@ import PaperPositionCard from '../components/panels/PaperPositionCard';
 import PaperTradeHistory from '../components/tables/PaperTradeHistory';
 import PaperEquityCurve from '../components/charts/PaperEquityCurve';
 import PaperTriggerLog from '../components/tables/PaperTriggerLog';
+import PaperMultiCoinView from './PaperMultiCoinView';
 import { usePaperOverview } from '../hooks/useApi';
 
 export default function PaperTradingPage() {
@@ -43,6 +44,11 @@ export default function PaperTradingPage() {
         <div className="text-xs">paper_trader.py를 실행하세요</div>
       </div>
     );
+  }
+
+  // 멀티코인 모드 분기
+  if (data.mode === 'MULTI' && data.portfolio_kpi) {
+    return <PaperMultiCoinView data={data} />;
   }
 
   const kpi = data.kpi;

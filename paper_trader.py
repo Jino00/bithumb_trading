@@ -89,6 +89,7 @@ class AdaptivePaperTrader:
         self._report_min = report_min
         self._verbose = verbose
         self._end_time = end_time          # 자동 종료 시각 (None이면 무한)
+        self._managed = False              # True이면 PaperPortfolioManager가 상태 기록 담당
 
         # 외부 컴포넌트
         self._client = BithumbClient("", "")   # 공개 API (시세 전용)
@@ -152,7 +153,8 @@ class AdaptivePaperTrader:
                   f"(점수: {result.best.score:.1f})")
 
         # 대시보드 상태 기록
-        PaperStateWriter.update(self)
+        if not self._managed:
+            PaperStateWriter.update(self)
         return True
 
     def run(self) -> None:
@@ -280,7 +282,8 @@ class AdaptivePaperTrader:
                           f"활성 전략 없음 | {current_regime}")
 
         # 대시보드 상태 기록 (매 사이클)
-        PaperStateWriter.update(self)
+        if not self._managed:
+            PaperStateWriter.update(self)
 
     # ── 트리거 핸들링 ─────────────────────────────────────────
 
@@ -412,7 +415,8 @@ class AdaptivePaperTrader:
               f"잔고: {self._balance_krw:,.0f}원")
 
         # 매도 즉시 대시보드 갱신
-        PaperStateWriter.update(self)
+        if not self._managed:
+            PaperStateWriter.update(self)
 
     def _check_exit(self, price: float, df: pd.DataFrame) -> None:
         """SL / TP / HA_WEAK 청산 조건 확인."""

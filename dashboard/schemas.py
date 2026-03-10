@@ -200,6 +200,7 @@ class PaperTradeRecord(BaseModel):
     pnl_pct: float
     exit_reason: str
     invested_krw: float = 0
+    coin: str = ""
 
 
 class PaperEquityPoint(BaseModel):
@@ -207,10 +208,44 @@ class PaperEquityPoint(BaseModel):
     balance: float
 
 
+class PaperCoinSlotInfo(BaseModel):
+    """멀티코인 모드: 개별 코인 슬롯 정보."""
+    coin: str
+    allocated_krw: float = 0
+    balance_krw: float = 0
+    active_strategy_id: str = ""
+    active_strategy_name: str = ""
+    regime: str = "UNKNOWN"
+    cycle_count: int = 0
+    total_trades: int = 0
+    win_rate: float = 0.0
+    total_return_pct: float = 0.0
+    position: Optional[PaperPositionInfo] = None
+    draining: bool = False
+    activated_at: Optional[str] = None
+
+
+class PaperPortfolioKPI(BaseModel):
+    """멀티코인 포트폴리오 수준 KPI."""
+    total_value: float = 0
+    initial_capital: float = 0
+    unallocated_krw: float = 0
+    total_return_pct: float = 0.0
+    total_trades: int = 0
+    win_rate: float = 0.0
+    active_coins: list[str] = []
+    max_positions: int = 5
+    scan_count: int = 0
+    blacklist: list[str] = []
+
+
 class PaperOverview(BaseModel):
     updated_at: Optional[str] = None
+    mode: str = "SINGLE"
     kpi: PaperKPI = PaperKPI()
+    portfolio_kpi: Optional[PaperPortfolioKPI] = None
     position: Optional[PaperPositionInfo] = None
+    positions: list[PaperCoinSlotInfo] = []
     eval_scores: list[PaperEvalScore] = []
     triggers: list[PaperTriggerEvent] = []
     trades: list[PaperTradeRecord] = []

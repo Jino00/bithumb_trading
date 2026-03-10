@@ -171,6 +171,7 @@ export interface PaperTradeRecord {
   pnl_pct: number;
   exit_reason: string;
   invested_krw: number;
+  coin?: string;
 }
 
 export interface PaperEquityPoint {
@@ -178,10 +179,44 @@ export interface PaperEquityPoint {
   balance: number;
 }
 
+// ── 멀티코인 페이퍼 트레이딩 ─────────────────────────────
+
+export interface PaperCoinSlotInfo {
+  coin: string;
+  allocated_krw: number;
+  balance_krw: number;
+  active_strategy_id: string;
+  active_strategy_name: string;
+  regime: string;
+  cycle_count: number;
+  total_trades: number;
+  win_rate: number;
+  total_return_pct: number;
+  position: PaperPositionInfo | null;
+  draining: boolean;
+  activated_at: string | null;
+}
+
+export interface PaperPortfolioKPI {
+  total_value: number;
+  initial_capital: number;
+  unallocated_krw: number;
+  total_return_pct: number;
+  total_trades: number;
+  win_rate: number;
+  active_coins: string[];
+  max_positions: number;
+  scan_count: number;
+  blacklist: string[];
+}
+
 export interface PaperOverview {
   updated_at: string | null;
+  mode: string;
   kpi: PaperKPI;
+  portfolio_kpi: PaperPortfolioKPI | null;
   position: PaperPositionInfo | null;
+  positions: PaperCoinSlotInfo[];
   eval_scores: PaperEvalScore[];
   triggers: PaperTriggerEvent[];
   trades: PaperTradeRecord[];

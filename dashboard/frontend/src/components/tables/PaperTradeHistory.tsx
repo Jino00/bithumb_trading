@@ -3,9 +3,10 @@ import type { PaperTradeRecord } from '../../types';
 
 interface Props {
   trades: PaperTradeRecord[];
+  multiCoin?: boolean;
 }
 
-export default function PaperTradeHistory({ trades }: Props) {
+export default function PaperTradeHistory({ trades, multiCoin = false }: Props) {
   if (trades.length === 0) {
     return (
       <div className="bg-bg-secondary border border-border rounded-xl p-6 text-center text-text-secondary">
@@ -25,6 +26,7 @@ export default function PaperTradeHistory({ trades }: Props) {
           <thead className="sticky top-0 bg-bg-secondary">
             <tr className="text-text-secondary text-xs border-b border-border">
               <th className="text-left py-2 px-2">시간</th>
+              {multiCoin && <th className="text-left py-2 px-2">코인</th>}
               <th className="text-left py-2 px-2">전략</th>
               <th className="text-right py-2 px-2">진입가</th>
               <th className="text-right py-2 px-2">청산가</th>
@@ -38,6 +40,11 @@ export default function PaperTradeHistory({ trades }: Props) {
                 <td className="py-1.5 px-2 text-xs text-text-secondary whitespace-nowrap">
                   {t.exit_time}
                 </td>
+                {multiCoin && (
+                  <td className="py-1.5 px-2 text-xs font-medium">
+                    {t.coin || '—'}
+                  </td>
+                )}
                 <td className="py-1.5 px-2 text-xs">{t.strategy}</td>
                 <td className="py-1.5 px-2 text-right text-xs">
                   {t.entry_price.toLocaleString()}
