@@ -4,6 +4,7 @@ import DashboardLayout from './components/layout/DashboardLayout';
 import DashboardPage from './pages/DashboardPage';
 import TradesPage from './pages/TradesPage';
 import AnalyticsPage from './pages/AnalyticsPage';
+import PaperTradingPage from './pages/PaperTradingPage';
 
 export default function App() {
   return (
@@ -13,6 +14,7 @@ export default function App() {
           <Route path="/" element={<DashboardPage />} />
           <Route path="/trades" element={<TradesPage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
+          <Route path="/paper" element={<PaperTradingPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

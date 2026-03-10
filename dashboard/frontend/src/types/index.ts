@@ -8,6 +8,12 @@ export interface CoinSlotStatus {
   entry_id: number | null;
   entry_price: number | null;
   entry_time: string | null;
+  current_price: number | null;
+  unrealized_pnl: number | null;
+  entry_reason: string | null;
+  rsi_at_entry: number | null;
+  stop_loss_pct: number | null;
+  take_profit_pct: number | null;
   strategy: string;
   live_win_rate: number;
   risk_dd: number;
@@ -107,6 +113,83 @@ export interface SystemEvent {
   detail: string | null;
 }
 
+// ── 페이퍼 트레이딩 ────────────────────────────────────────
+
+export interface PaperKPI {
+  balance: number;
+  total_value: number;
+  initial_capital: number;
+  total_return_pct: number;
+  total_trades: number;
+  win_rate: number;
+  active_strategy_id: string;
+  active_strategy_name: string;
+  regime: string;
+  coin: string;
+  cycle_count: number;
+}
+
+export interface PaperEvalScore {
+  strategy_id: string;
+  name: string;
+  score: number;
+  trades_count: number;
+  win_rate: number;
+  pf: number;
+  total_return: number;
+  is_active: boolean;
+}
+
+export interface PaperPositionInfo {
+  coin: string;
+  entry_price: number;
+  quantity: number;
+  entry_time: string;
+  sl_pct: number;
+  tp_pct: number;
+  strategy: string;
+  invested_krw: number;
+}
+
+export interface PaperTriggerEvent {
+  timestamp: string;
+  trigger_type: string;
+  severity: string;
+  description: string;
+  old_value: string | null;
+  new_value: string | null;
+}
+
+export interface PaperTradeRecord {
+  entry_time: string;
+  exit_time: string;
+  strategy: string;
+  entry_price: number;
+  exit_price: number;
+  quantity: number;
+  pnl_krw: number;
+  pnl_pct: number;
+  exit_reason: string;
+  invested_krw: number;
+}
+
+export interface PaperEquityPoint {
+  timestamp: string;
+  balance: number;
+}
+
+export interface PaperOverview {
+  updated_at: string | null;
+  kpi: PaperKPI;
+  position: PaperPositionInfo | null;
+  eval_scores: PaperEvalScore[];
+  triggers: PaperTriggerEvent[];
+  trades: PaperTradeRecord[];
+  equity_curve: PaperEquityPoint[];
+}
+
+// ── WebSocket ──────────────────────────────────────────────
+
 export interface LiveStateUpdate {
   type: string;
   timestamp: string;
@@ -117,4 +200,5 @@ export interface LiveStateUpdate {
   total_trades: number;
   active_coins: string[];
   positions: CoinSlotStatus[];
+  paper?: PaperKPI | null;
 }

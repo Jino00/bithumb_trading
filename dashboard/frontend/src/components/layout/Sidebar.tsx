@@ -1,10 +1,11 @@
 // 사이드바 — 네비게이션 + 활성 코인 목록.
-import { LayoutDashboard, History, BarChart3 } from 'lucide-react';
+import { LayoutDashboard, History, BarChart3, FlaskConical } from 'lucide-react';
 import { NavLink } from 'react-router-dom';
 import { useBotStore } from '../../stores/botStore';
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/paper', icon: FlaskConical, label: 'Paper Trading' },
   { to: '/trades', icon: History, label: 'Trades' },
   { to: '/analytics', icon: BarChart3, label: 'Analytics' },
 ];

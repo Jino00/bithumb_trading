@@ -14,6 +14,12 @@ class CoinSlotStatus(BaseModel):
     entry_id: Optional[int] = None
     entry_price: Optional[float] = None
     entry_time: Optional[str] = None
+    current_price: Optional[float] = None
+    unrealized_pnl: Optional[float] = None
+    entry_reason: Optional[str] = None
+    rsi_at_entry: Optional[float] = None
+    stop_loss_pct: Optional[float] = None
+    take_profit_pct: Optional[float] = None
     strategy: str = ""
     live_win_rate: float = 0.0
     risk_dd: float = 0.0
@@ -136,6 +142,81 @@ class HealthStatus(BaseModel):
     active_coins: int = 0
 
 
+# ── 페이퍼 트레이딩 ────────────────────────────────────────────────
+
+class PaperKPI(BaseModel):
+    balance: float = 0
+    total_value: float = 0
+    initial_capital: float = 0
+    total_return_pct: float = 0.0
+    total_trades: int = 0
+    win_rate: float = 0.0
+    active_strategy_id: str = ""
+    active_strategy_name: str = ""
+    regime: str = "UNKNOWN"
+    coin: str = "BTC"
+    cycle_count: int = 0
+
+
+class PaperEvalScore(BaseModel):
+    strategy_id: str
+    name: str
+    score: float
+    trades_count: int
+    win_rate: float
+    pf: float
+    total_return: float
+    is_active: bool = False
+
+
+class PaperPositionInfo(BaseModel):
+    coin: str
+    entry_price: float
+    quantity: float
+    entry_time: str
+    sl_pct: float
+    tp_pct: float
+    strategy: str
+    invested_krw: float = 0
+
+
+class PaperTriggerEvent(BaseModel):
+    timestamp: str = ""
+    trigger_type: str
+    severity: str
+    description: str
+    old_value: Optional[str] = None
+    new_value: Optional[str] = None
+
+
+class PaperTradeRecord(BaseModel):
+    entry_time: str
+    exit_time: str
+    strategy: str
+    entry_price: float
+    exit_price: float
+    quantity: float
+    pnl_krw: float
+    pnl_pct: float
+    exit_reason: str
+    invested_krw: float = 0
+
+
+class PaperEquityPoint(BaseModel):
+    timestamp: str
+    balance: float
+
+
+class PaperOverview(BaseModel):
+    updated_at: Optional[str] = None
+    kpi: PaperKPI = PaperKPI()
+    position: Optional[PaperPositionInfo] = None
+    eval_scores: list[PaperEvalScore] = []
+    triggers: list[PaperTriggerEvent] = []
+    trades: list[PaperTradeRecord] = []
+    equity_curve: list[PaperEquityPoint] = []
+
+
 # ── WebSocket ─────────────────────────────────────────────────────
 
 class LiveStateUpdate(BaseModel):
@@ -147,3 +228,4 @@ class LiveStateUpdate(BaseModel):
     total_trades: int
     active_coins: list[str]
     positions: list[CoinSlotStatus]
+    paper: Optional[PaperKPI] = None

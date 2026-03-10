@@ -6,7 +6,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from dashboard.shared_state import SharedStateReader
+from dashboard.shared_state import PaperStateReader, SharedStateReader
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +14,7 @@ router = APIRouter()
 
 # WebSocket 전용 Reader (서버 모듈 순환 참조 방지)
 _ws_state_reader = SharedStateReader(cache_ttl=1.0)
+_ws_paper_reader = PaperStateReader(cache_ttl=1.0)
 
 
 @router.websocket("/live")
@@ -40,11 +41,23 @@ async def websocket_live(ws: WebSocket):
                     "entry_id": extra.get("entry_id"),
                     "entry_price": extra.get("entry_price"),
                     "entry_time": extra.get("entry_time"),
+                    "current_price": extra.get("current_price"),
+                    "unrealized_pnl": extra.get("unrealized_pnl"),
+                    "entry_reason": extra.get("entry_reason"),
+                    "rsi_at_entry": extra.get("rsi_at_entry"),
+                    "stop_loss_pct": extra.get("stop_loss_pct"),
+                    "take_profit_pct": extra.get("take_profit_pct"),
                     "strategy": info.get("strategy", ""),
                     "live_win_rate": info.get("live_win_rate", 0.0),
                     "risk_dd": info.get("risk_dd", 0.0),
                     "activated_at": info.get("activated_at"),
                 })
+
+            # 페이퍼 트레이딩 KPI 요약 (경량)
+            paper_kpi = None
+            paper_data = _ws_paper_reader.read()
+            if paper_data and "kpi" in paper_data:
+                paper_kpi = paper_data["kpi"]
 
             message = {
                 "type": "state_update",
@@ -56,6 +69,7 @@ async def websocket_live(ws: WebSocket):
                 "total_trades": portfolio.get("total_trades", 0),
                 "active_coins": portfolio.get("active_coins", []),
                 "positions": positions,
+                "paper": paper_kpi,
             }
 
             await ws.send_text(json.dumps(message, default=str))

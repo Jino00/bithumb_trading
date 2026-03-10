@@ -10,6 +10,7 @@ import type {
   PnLBucket,
   SystemEvent,
   CompletedTrade,
+  PaperOverview,
 } from '../types';
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -121,5 +122,13 @@ export function useSystemEvents(limit = 50) {
     queryKey: ['system', 'events', limit],
     queryFn: () => fetchJson(`/api/system/events?limit=${limit}`),
     refetchInterval: 10000,
+  });
+}
+
+export function usePaperOverview() {
+  return useQuery<PaperOverview>({
+    queryKey: ['paper', 'overview'],
+    queryFn: () => fetchJson('/api/paper/overview'),
+    refetchInterval: 5000,
   });
 }

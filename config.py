@@ -46,6 +46,15 @@ ADX_PERIOD = 14                         # ADX 계산 기간
 ADX_TREND_THRESHOLD = 25.0              # ADX ≥ 25 → 추세장
 ADX_RANGE_THRESHOLD = 20.0              # ADX < 20 → 횡보장
 
+# ── 앙상블 시장 레짐 감지 (Ensemble Regime Detection) ─────────
+REGIME_WEIGHTS = [0.15, 0.10, 0.25, 0.20, 0.10, 0.10, 0.10]  # 7채널 가중치 (그리드서치 최적)
+REGIME_BULL_THRESHOLD = 0.5               # 이 이상이면 BULL (그리드서치 최적)
+REGIME_BEAR_THRESHOLD = -0.5              # 이 이하면 BEAR (그리드서치 최적)
+REGIME_LOOKAHEAD_BARS = 24                # Ground truth 미래 참조 봉 수
+REGIME_PRICE_THRESHOLD = 1.0              # Ground truth ±% 기준
+REGIME_EMA_SLOPE_WINDOW = 5               # EMA 기울기 계산 윈도우
+REGIME_VOLUME_MA_PERIOD = 20              # 거래량 이동평균 기간
+
 # ── 그리드 전략 (횡보장용) ────────────────────────────────────
 GRID_COUNT = 10                         # 그리드 개수
 GRID_RANGE_PERIOD = 50                  # 범위 계산에 쓰는 캔들 수
@@ -118,3 +127,78 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "logger", "trades.db")
 # ── 대시보드 설정 ─────────────────────────────────────────
 DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "8080"))
 DASHBOARD_STATE_PATH = os.path.join(os.path.dirname(__file__), "dashboard", "state.json")
+DASHBOARD_PAPER_STATE_PATH = os.path.join(os.path.dirname(__file__), "paper_state.json")
+
+# ── 단타 메타전략 설정 (SCALP) ──────────────────────────────
+# S1: RSI 풀백 (Round 3 최적화: 55.2% WR)
+SCALP_RSI_PERIOD = 14                          # RSI 계산 기간
+SCALP_RSI_PULLBACK_LOW = 25.0                  # 풀백 구간 하한 (35→25, 넓은 구간)
+SCALP_RSI_PULLBACK_HIGH = 50.0                 # 풀백 구간 상한
+SCALP_RSI_OVERSOLD = 30.0                      # 과매도 바운스 진입
+SCALP_RSI_OVERBOUGHT_EXIT = 72.0               # RSI 과매수 청산
+SCALP_EMA_SHORT = 20                           # 단기 EMA
+SCALP_EMA_LONG = 50                            # 장기 EMA
+SCALP_ATR_PERIOD = 14                          # ATR 기간
+SCALP_ATR_SL_MULT = 1.5                        # SL = ATR × 배수
+SCALP_ATR_TP_MULT = 1.5                        # TP = ATR × 배수 (3.0→1.5, RR 1:1)
+SCALP_ATR_TRAIL_MULT = 2.0                     # 트레일링 ATR 배수
+SCALP_VOL_MIN_RATIO = 0.5                      # 최소 거래량 비율 (0.8→0.5, 완화)
+SCALP_COOLDOWN_BARS = 3                        # 진입 후 쿨다운 봉 수
+
+# S2: 거래량 폭발 (Dux, Round 3 최적화: BULL에서 62.5% WR)
+SCALP_VOL_EXPLOSION_MULT = 2.5                 # 거래량 폭발 판정 배수 (2.0→2.5)
+SCALP_VOL_MA_PERIOD = 10                       # 거래량 MA 기간
+SCALP_VOL_DRY_RATIO = 0.6                      # 거래량 메마름 판정 비율 (0.7→0.6)
+SCALP_VOL_BOX_LOOKBACK = 15                    # 박스권 형성 확인 봉 수 (20→15)
+SCALP_VOL_RR_RATIO = 2.5                       # 손익비 1:N (3.0→2.5)
+
+# S3: 하이킨아시 (Garcia, Round 8 비용포함 최적화: +9.64%, PF 1.78 ⭐핵심)
+SCALP_HA_DOJI_BODY_RATIO = 0.05                # 도지 판정: 몸통/전체 비율 (0.15→0.05, 엄격한 도지)
+SCALP_HA_FLAT_WICK_TOL = 0.002                 # 평평한 바닥 허용 오차 비율 (0.0005→0.002, 완화)
+SCALP_HA_RR_RATIO = 3.0                        # 손익비 1:N (2.0→3.0, 비용포함 최적)
+SCALP_HA_MIN_BEARISH_CANDLES = 3               # 도지 전 최소 음봉 수 (4→3)
+SCALP_HA_WEAK_MIN_PCT = 1.0                    # HA_WEAK 청산 최소 이익 % (핵심: 1% 미만이면 청산 안 함)
+SCALP_HA_MIN_ATR_PCT = 0.3                     # 최소 ATR/가격 비율 % (저변동성 필터)
+
+# S4: VWAP (Agrawal, Round 3 최적화: 44.1% WR)
+SCALP_VWAP_PERIOD = 24                         # VWAP 계산 기간 (봉 수)
+SCALP_VWAP_BAND_MULT = 2.0                     # VWAP 밴드 표준편차 배수
+SCALP_VWAP_RR_RATIO = 1.5                      # 손익비 1:N (2.0→1.5)
+SCALP_VWAP_PULLBACK_TOLERANCE = 0.003          # VWAP 근접 판정 허용 비율 (0.005→0.003)
+
+# S5: BEAR 과매도 반등 (역추세 평균회귀)
+SCALP_BEAR_RSI_THRESHOLD = 25.0                # 과매도 RSI 진입 기준
+SCALP_BEAR_RSI_PERIOD = 14                     # RSI 계산 기간
+SCALP_BEAR_BB_PERIOD = 20                      # 볼린저밴드 기간
+SCALP_BEAR_BB_STD = 2.0                        # 볼린저밴드 표준편차 배수
+SCALP_BEAR_VOL_SPIKE = 1.5                     # 투매 클라이맥스 거래량 배수
+SCALP_BEAR_SL_PCT = 1.5                        # 타이트 손절 %
+SCALP_BEAR_TP_PCT = 2.0                        # 빠른 익절 %
+SCALP_BEAR_MAX_HOLD_BARS = 10                  # 최대 보유 봉 수
+SCALP_BEAR_CONSEC_LOSS_LIMIT = 3               # 연속 손실 시 쿨다운 발동
+SCALP_BEAR_COOLDOWN_BARS = 10                  # 쿨다운 봉 수
+SCALP_BEAR_POSITION_SCALE = 0.5                # 포지션 크기 축소 배율 (역추세)
+
+# S6: SMMA 리테스트 + 프렉탈 (이동평균선 매매법, 아티브리아 전략)
+SCALP_SMMA_SHORT = 21                          # 단기 SMMA 기간
+SCALP_SMMA_MID = 50                            # 중기 SMMA 기간
+SCALP_SMMA_LONG = 200                          # 장기 SMMA 기간
+SCALP_SMMA_RR_RATIO = 1.5                      # 손익비 1:N (영상에서 1:1~1:2)
+SCALP_SMMA_MAX_HOLD = 20                       # 최대 보유 봉 수
+SCALP_SMMA_TANGLE_TOL = 0.005                  # MA 꼬임 판정 허용 비율 (0.5%)
+SCALP_SMMA_RETEST_TOL = 0.005                  # 리테스트 허용 오차 (0.5%)
+
+# 공통
+SCALP_USE_REGIME_FILTER = True                 # 레짐 필터 사용 여부
+SCALP_ENTRY_MODE = "meta"                      # rsi|volume|ha|vwap|meta
+
+# ── 백테스트 정밀도 설정 ──────────────────────────────────
+BACKTEST_FEE_PCT = 0.04                        # 빗썸 편도 수수료 % (양방향 합계 0.08%)
+BACKTEST_SLIPPAGE_PCT = 0.05                   # 슬리피지 % (5 bps)
+
+# ── 적응형 페이퍼 트레이딩 설정 ─────────────────────────────
+PAPER_TRADING_INTERVAL_MIN = 5                 # 트레이딩 사이클 주기 (분)
+PAPER_REPORT_INTERVAL_MIN = 60                 # 상태 보고 주기 (분)
+PAPER_OHLCV_COUNT = 500                        # 실시간 캔들 수
+PAPER_STARTUP_OHLCV_COUNT = 5000               # 시작 시 전체 평가용 캔들 수
+PAPER_REEVAL_COOLDOWN_MIN = 15                 # 재평가 후 쿨다운 (분)

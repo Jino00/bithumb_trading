@@ -11,6 +11,7 @@ from learning.adaptive_engine import AdaptiveEngine
 from risk.risk_manager import RiskManager
 from strategy.base_strategy import BaseStrategy
 from strategy.rsi_strategy import RSIStrategy, SignalContext
+from strategy.scalp_strategy import ScalpSignalContext
 
 logger = logging.getLogger("bot.trading_bot")
 
@@ -89,6 +90,11 @@ class TradingBot:
         self._current_entry_id: Optional[int] = None
         self._entry_time: Optional[datetime] = None
         self._entry_price: Optional[float] = None
+        self._last_price: Optional[float] = None
+        self._entry_reason: Optional[str] = None
+        self._entry_rsi: Optional[float] = None
+        self._scalp_sl_pct: float = 0.0
+        self._scalp_tp_pct: float = 0.0
 
         self._recover_open_position()
 
@@ -154,38 +160,49 @@ class TradingBot:
             logger.error("OHLCV 조회 실패")
             return None, None
 
-        ctx: SignalContext = self.strategy.generate_signal_with_context(df)
+        ctx = self.strategy.generate_signal_with_context(df)
         current_price = self.client.get_current_price(self.coin)
         if current_price is None:
             logger.error("현재가 조회 실패")
             return None, None
 
-        logger.info(
-            f"[{self.coin}] price={current_price:,.0f} RSI={ctx.rsi_value:.1f} "
-            f"vol={ctx.volume_ratio:.2f}x trend={ctx.trend} → {ctx.signal}"
-        )
+        self._last_price = current_price
+
+        if isinstance(ctx, ScalpSignalContext):
+            logger.info(
+                f"[{self.coin}] price={current_price:,.0f} "
+                f"regime={ctx.regime} sub={ctx.sub_strategy} → {ctx.signal} "
+                f"| {ctx.reason}"
+            )
+        else:
+            logger.info(
+                f"[{self.coin}] price={current_price:,.0f} RSI={ctx.rsi_value:.1f} "
+                f"vol={ctx.volume_ratio:.2f}x trend={ctx.trend} → {ctx.signal}"
+            )
         return ctx, current_price
 
-    def _process_signal(self, ctx: SignalContext, current_price: float) -> None:
+    def _process_signal(self, ctx, current_price: float) -> None:
         """신호에 따라 진입/청산을 처리한다."""
         if self._current_entry_id is not None and self._entry_price is not None:
             self._check_exit(self.coin, current_price, ctx)
         elif ctx.signal == "BUY":
             if self.adaptive_engine:
+                trend = getattr(ctx, "trend", getattr(ctx, "regime", "UNKNOWN"))
+                rsi = getattr(ctx, "rsi_value", 0.0)
                 blocked, reason = self.adaptive_engine.should_block_buy(
-                    hour=datetime.now().hour, trend=ctx.trend
+                    hour=datetime.now().hour, trend=trend
                 )
                 if blocked:
                     logger.info(f"[Adaptive] 매수 차단: {reason}")
                     self.trade_logger.log_event(
-                        "BUY_BLOCKED", self.coin, {"reason": reason, "rsi": ctx.rsi_value}
+                        "BUY_BLOCKED", self.coin, {"reason": reason, "rsi": rsi}
                     )
                     return
             self._execute_buy(self.coin, current_price, ctx)
 
     # ── 진입 / 청산 ────────────────────────────────────────
 
-    def _execute_buy(self, coin: str, price: float, ctx: SignalContext) -> None:
+    def _execute_buy(self, coin: str, price: float, ctx) -> None:
         """매수 주문 실행 및 로그"""
         trade_krw = (
             self.adaptive_engine.get_trade_amount(config.TRADE_AMOUNT)
@@ -199,39 +216,66 @@ class TradingBot:
             self.trade_logger.log_event("ORDER_ERROR", coin, {"side": "BUY", "error": str(e)})
             raise
 
+        # ScalpSignalContext와 SignalContext 모두 지원
+        rsi_value = getattr(ctx, "rsi_value", 0.0)
+        volume_ratio = getattr(ctx, "volume_ratio", 0.0)
+        trend = getattr(ctx, "trend", getattr(ctx, "regime", "UNKNOWN"))
+        volatility = getattr(ctx, "volatility", "UNKNOWN")
+        indicators = getattr(ctx, "indicators", {})
+
+        # ScalpSignalContext인 경우 추가 정보를 indicators에 포함
+        if isinstance(ctx, ScalpSignalContext):
+            indicators = {
+                "sub_strategy": ctx.sub_strategy,
+                "regime": ctx.regime,
+                "sl_pct": ctx.sl_pct,
+                "tp_pct": ctx.tp_pct,
+            }
+
         entry_id = self.trade_logger.log_entry(
             strategy_name=self.strategy.name,
             coin=coin,
             price=price,
             amount=amount,
             reason=ctx.reason,
-            rsi_value=ctx.rsi_value,
-            volume_ratio=ctx.volume_ratio,
-            trend=ctx.trend,
-            volatility=ctx.volatility,
-            indicators=ctx.indicators,
+            rsi_value=rsi_value,
+            volume_ratio=volume_ratio,
+            trend=trend,
+            volatility=volatility,
+            indicators=indicators,
             result=result,
         )
         self.risk_manager.record_trade("BUY", price)
         self._current_entry_id = entry_id
         self._entry_price = price
         self._entry_time = datetime.now()
+        self._entry_reason = ctx.reason
+        self._entry_rsi = rsi_value
+
+        # ScalpStrategy의 동적 SL/TP 저장
+        self._scalp_sl_pct = getattr(ctx, "sl_pct", 0.0)
+        self._scalp_tp_pct = getattr(ctx, "tp_pct", 0.0)
+
         if self.notifier:
             self.notifier.notify_buy(coin, price, amount, ctx.reason)
 
-    def _check_exit(self, coin: str, current_price: float, ctx: SignalContext) -> None:
+    def _check_exit(self, coin: str, current_price: float, ctx) -> None:
         """청산 조건 확인 후 매도 실행"""
         pnl_pct = (current_price - self._entry_price) / self._entry_price * 100
 
-        # 적응형 SL/TP 우선 사용, 없으면 config 기본값
-        sl_pct = (
-            self.adaptive_engine.get_stop_loss_pct()
-            if self.adaptive_engine else config.STOP_LOSS_PCT
-        )
-        tp_pct = (
-            self.adaptive_engine.get_take_profit_pct()
-            if self.adaptive_engine else config.TAKE_PROFIT_PCT
-        )
+        # ScalpStrategy 동적 SL/TP → 적응형 SL/TP → config 기본값
+        scalp_sl = getattr(self, "_scalp_sl_pct", 0.0)
+        scalp_tp = getattr(self, "_scalp_tp_pct", 0.0)
+
+        if scalp_sl > 0 and scalp_tp > 0:
+            sl_pct = scalp_sl
+            tp_pct = scalp_tp
+        elif self.adaptive_engine:
+            sl_pct = self.adaptive_engine.get_stop_loss_pct()
+            tp_pct = self.adaptive_engine.get_take_profit_pct()
+        else:
+            sl_pct = config.STOP_LOSS_PCT
+            tp_pct = config.TAKE_PROFIT_PCT
 
         should_exit = (
             pnl_pct <= -sl_pct
@@ -241,13 +285,7 @@ class TradingBot:
         if not should_exit:
             return
 
-        exit_reason = RSIStrategy.build_exit_reason(
-            rsi=ctx.rsi_value if ctx.signal == "SELL" else None,
-            pnl_pct=pnl_pct,
-            stop_loss_pct=sl_pct,
-            take_profit_pct=tp_pct,
-            overbought=self.strategy.overbought,
-        )
+        exit_reason = self._build_exit_reason(ctx, pnl_pct, sl_pct, tp_pct)
         hold_minutes = (
             (datetime.now() - self._entry_time).total_seconds() / 60
             if self._entry_time else 0.0
@@ -288,10 +326,33 @@ class TradingBot:
         )
         logger.info(f"[Monitor] {self.live_monitor.status()}")
 
+    def _build_exit_reason(self, ctx, pnl_pct: float, sl_pct: float, tp_pct: float) -> str:
+        """RSI/Scalp 전략 모두 지원하는 청산 사유 생성."""
+        if isinstance(ctx, ScalpSignalContext):
+            if pnl_pct <= -sl_pct:
+                return f"SL 손절 ({pnl_pct:+.1f}%, 한도 -{sl_pct:.1f}%)"
+            if pnl_pct >= tp_pct:
+                return f"TP 익절 ({pnl_pct:+.1f}%, 목표 +{tp_pct:.1f}%)"
+            return f"전략 청산 신호 ({ctx.reason})"
+        # RSIStrategy의 build_exit_reason 사용
+        rsi = getattr(ctx, "rsi_value", None)
+        overbought = getattr(self.strategy, "overbought", 70)
+        return RSIStrategy.build_exit_reason(
+            rsi=rsi if ctx.signal == "SELL" else None,
+            pnl_pct=pnl_pct,
+            stop_loss_pct=sl_pct,
+            take_profit_pct=tp_pct,
+            overbought=overbought,
+        )
+
     def _reset_position(self) -> None:
         self._current_entry_id = None
         self._entry_price = None
         self._entry_time = None
+        self._entry_reason = None
+        self._entry_rsi = None
+        self._scalp_sl_pct = 0.0
+        self._scalp_tp_pct = 0.0
 
     def _recover_open_position(self) -> None:
         """봇 재시작 시 미청산 포지션을 DB에서 복구한다."""
@@ -299,6 +360,8 @@ class TradingBot:
         if open_entry:
             self._current_entry_id = open_entry["id"]
             self._entry_price = open_entry["price"]
+            self._entry_reason = open_entry.get("reason")
+            self._entry_rsi = open_entry.get("rsi_value")
             try:
                 self._entry_time = datetime.fromisoformat(open_entry["timestamp"])
             except Exception:

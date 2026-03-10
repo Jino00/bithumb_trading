@@ -11,6 +11,29 @@ from dashboard.server import state_reader
 router = APIRouter()
 
 
+def _build_position(coin: str, info: dict, extra: dict) -> CoinSlotStatus:
+    """슬롯 정보 + 추가 정보를 합쳐 CoinSlotStatus를 생성한다."""
+    return CoinSlotStatus(
+        coin=coin,
+        draining=info.get("draining", False),
+        active=info.get("active", True),
+        has_position=info.get("has_position", False),
+        entry_id=extra.get("entry_id"),
+        entry_price=extra.get("entry_price"),
+        entry_time=extra.get("entry_time"),
+        current_price=extra.get("current_price"),
+        unrealized_pnl=extra.get("unrealized_pnl"),
+        entry_reason=extra.get("entry_reason"),
+        rsi_at_entry=extra.get("rsi_at_entry"),
+        stop_loss_pct=extra.get("stop_loss_pct"),
+        take_profit_pct=extra.get("take_profit_pct"),
+        strategy=info.get("strategy", ""),
+        live_win_rate=info.get("live_win_rate", 0.0),
+        risk_dd=info.get("risk_dd", 0.0),
+        activated_at=info.get("activated_at"),
+    )
+
+
 @router.get("/overview", response_model=PortfolioOverview)
 def get_overview():
     """KPI: 자산, MDD, 승률, 활성코인 수."""
@@ -19,22 +42,10 @@ def get_overview():
     slots_extra = state.get("slots_extra", {})
     slots = portfolio.get("slots", {})
 
-    positions = []
-    for coin, info in slots.items():
-        extra = slots_extra.get(coin, {})
-        positions.append(CoinSlotStatus(
-            coin=coin,
-            draining=info.get("draining", False),
-            active=info.get("active", True),
-            has_position=info.get("has_position", False),
-            entry_id=extra.get("entry_id"),
-            entry_price=extra.get("entry_price"),
-            entry_time=extra.get("entry_time"),
-            strategy=info.get("strategy", ""),
-            live_win_rate=info.get("live_win_rate", 0.0),
-            risk_dd=info.get("risk_dd", 0.0),
-            activated_at=info.get("activated_at"),
-        ))
+    positions = [
+        _build_position(coin, info, slots_extra.get(coin, {}))
+        for coin, info in slots.items()
+    ]
 
     return PortfolioOverview(
         bot_active=state.get("bot_active", False),
@@ -59,23 +70,10 @@ def get_positions():
     slots_extra = state.get("slots_extra", {})
     slots = portfolio.get("slots", {})
 
-    result = []
-    for coin, info in slots.items():
-        extra = slots_extra.get(coin, {})
-        result.append(CoinSlotStatus(
-            coin=coin,
-            draining=info.get("draining", False),
-            active=info.get("active", True),
-            has_position=info.get("has_position", False),
-            entry_id=extra.get("entry_id"),
-            entry_price=extra.get("entry_price"),
-            entry_time=extra.get("entry_time"),
-            strategy=info.get("strategy", ""),
-            live_win_rate=info.get("live_win_rate", 0.0),
-            risk_dd=info.get("risk_dd", 0.0),
-            activated_at=info.get("activated_at"),
-        ))
-    return result
+    return [
+        _build_position(coin, info, slots_extra.get(coin, {}))
+        for coin, info in slots.items()
+    ]
 
 
 @router.get("/config", response_model=ConfigSnapshot)

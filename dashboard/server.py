@@ -52,6 +52,7 @@ app.add_middleware(
 # ── 라우터 등록 ──────────────────────────────────────────────────
 
 from dashboard.routers.analytics import router as analytics_router  # noqa: E402
+from dashboard.routers.paper import router as paper_router  # noqa: E402
 from dashboard.routers.portfolio import router as portfolio_router  # noqa: E402
 from dashboard.routers.system import router as system_router  # noqa: E402
 from dashboard.routers.trades import router as trades_router  # noqa: E402
@@ -61,6 +62,7 @@ app.include_router(portfolio_router, prefix="/api/portfolio", tags=["portfolio"]
 app.include_router(trades_router, prefix="/api/trades", tags=["trades"])
 app.include_router(analytics_router, prefix="/api/analytics", tags=["analytics"])
 app.include_router(system_router, prefix="/api/system", tags=["system"])
+app.include_router(paper_router, prefix="/api/paper", tags=["paper"])
 app.include_router(ws_router, prefix="/ws", tags=["websocket"])
 
 
