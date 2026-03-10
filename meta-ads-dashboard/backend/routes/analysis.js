@@ -23,6 +23,7 @@ import {
   fetchAccountInsights,
   mapAccountInsightToSchema,
 } from "../services/meta-api.js";
+import { generatePostMortemReport } from "../services/postmortem-service.js";
 import { calcCampaignProfitability, calcProfitabilitySummary } from "../services/biz-metrics.js";
 
 const router = Router();
@@ -92,25 +93,37 @@ function generateMockAnalysis(_prompt) {
 router.get("/profitability", async (req, res) => {
   try {
     const db = getDb();
-    const period = req.query.period || "30d";
-    const validPeriods = ["1d", "7d", "15d", "30d"];
-    if (!validPeriods.includes(period)) {
-      return res.status(400).json({ error: `Invalid period. Use: ${validPeriods.join(", ")}` });
+    const since = req.query.since;
+    const until = req.query.until;
+    const isCustomRange = since && until;
+
+    const period = isCustomRange ? "custom" : (req.query.period || "30d");
+    if (!isCustomRange) {
+      const validPeriods = ["1d", "7d", "15d", "30d"];
+      if (!validPeriods.includes(period)) {
+        return res.status(400).json({ error: `Invalid period. Use: ${validPeriods.join(", ")} or since/until params` });
+      }
     }
 
     // Meta API에서 기간별 데이터 조회 (DB 누적 데이터 사용 금지 — CLAUDE.md 규칙)
     const cred = db.prepare("SELECT access_token, selected_ad_account_id FROM meta_credentials WHERE user_id = 'default'").get();
     const adAccountId = cred?.selected_ad_account_id;
 
+    const effectivePeriod = isCustomRange
+      ? `${Math.max(1, Math.ceil((new Date(until) - new Date(since)) / 86400000) + 1)}d`
+      : period;
+
     let campaigns = [];
     if (cred && adAccountId) {
-      const result = await fetchAccountInsights(cred.access_token, adAccountId, period);
+      const result = isCustomRange
+        ? await fetchAccountInsights(cred.access_token, adAccountId, "30d", { since, until })
+        : await fetchAccountInsights(cred.access_token, adAccountId, period);
       if (result.error) {
         return res.status(400).json({ error: `Meta API error: ${result.error}` });
       }
       campaigns = (result.data || []).map((insight, idx) => ({
         id: 10000 + idx,
-        ...mapAccountInsightToSchema(insight, period),
+        ...mapAccountInsightToSchema(insight, effectivePeriod),
         source: "meta",
       }));
     } else {
@@ -208,25 +221,37 @@ router.post("/product-costs", (req, res) => {
 router.post("/judge-all", async (req, res) => {
   try {
     const db = getDb();
-    const period = req.query.period || req.body.period || "30d";
-    const validPeriods = ["1d", "7d", "15d", "30d"];
-    if (!validPeriods.includes(period)) {
-      return res.status(400).json({ error: `Invalid period. Use: ${validPeriods.join(", ")}` });
+    const since = req.query.since;
+    const until = req.query.until;
+    const isCustomRange = since && until;
+
+    const period = isCustomRange ? "custom" : (req.query.period || req.body.period || "30d");
+    if (!isCustomRange) {
+      const validPeriods = ["1d", "7d", "15d", "30d"];
+      if (!validPeriods.includes(period)) {
+        return res.status(400).json({ error: `Invalid period. Use: ${validPeriods.join(", ")} or since/until params` });
+      }
     }
 
     // Meta API에서 기간별 데이터를 가져옴 (DB 누적 데이터 대신)
     const cred = db.prepare("SELECT access_token, selected_ad_account_id FROM meta_credentials WHERE user_id = 'default'").get();
     const adAccountId = cred?.selected_ad_account_id;
 
+    const effectivePeriod = isCustomRange
+      ? `${Math.max(1, Math.ceil((new Date(until) - new Date(since)) / 86400000) + 1)}d`
+      : period;
+
     let campaigns = [];
     if (cred && adAccountId) {
-      const result = await fetchAccountInsights(cred.access_token, adAccountId, period);
+      const result = isCustomRange
+        ? await fetchAccountInsights(cred.access_token, adAccountId, "30d", { since, until })
+        : await fetchAccountInsights(cred.access_token, adAccountId, period);
       if (result.error) {
         return res.status(400).json({ error: `Meta API error: ${result.error}` });
       }
       campaigns = (result.data || []).map((insight, idx) => ({
         id: 10000 + idx,
-        ...mapAccountInsightToSchema(insight, period),
+        ...mapAccountInsightToSchema(insight, effectivePeriod),
         source: "meta",
       }));
     } else {
@@ -250,7 +275,7 @@ router.post("/judge-all", async (req, res) => {
       }
     }
 
-    const { judgments, summary } = judgeAllCampaigns(campaigns, period);
+    const { judgments, summary } = judgeAllCampaigns(campaigns, effectivePeriod);
 
     // 판정 결과를 DB에 저장 (meta_campaign_id로 매칭)
     const updateByMetaId = db.prepare(`
@@ -275,7 +300,7 @@ router.post("/judge-all", async (req, res) => {
     });
     saveAll(judgments);
 
-    res.json({ judgments, summary, period });
+    res.json({ judgments, summary, period: effectivePeriod });
   } catch (err) {
     console.error("Judge error:", err);
     res.status(500).json({ error: err.message });
@@ -631,5 +656,42 @@ function saveAnalysisResults(db, campaigns) {
     console.error("Failed to save analysis results:", err.message);
   }
 }
+
+// ─── 포스트모템 분석 API ───
+
+// POST /api/analysis/postmortem — 전체 포스트모템 생성
+router.post("/postmortem", async (_req, res) => {
+  try {
+    const result = await generatePostMortemReport();
+    res.json(result);
+  } catch (err) {
+    console.error("[PostMortem] generation error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/analysis/postmortem/:metaCampaignId — 개별 캠페인 포스트모템
+router.get("/postmortem/:metaCampaignId", async (req, res) => {
+  try {
+    const { postMortems } = await generatePostMortemReport();
+    const pm = postMortems.find(p => p.campaign.meta_campaign_id === req.params.metaCampaignId);
+    if (!pm) return res.status(404).json({ error: "Campaign not found in post-mortem" });
+    res.json(pm);
+  } catch (err) {
+    console.error("[PostMortem] single campaign error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/analysis/postmortem-lessons — 저장된 학습 데이터 조회
+router.get("/postmortem-lessons", (_req, res) => {
+  try {
+    const db = getDb();
+    const lessons = db.prepare("SELECT * FROM postmortem_lessons ORDER BY confidence DESC, campaign_count DESC").all();
+    res.json({ lessons });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 export default router;

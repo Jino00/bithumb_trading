@@ -1,5 +1,5 @@
 // Meta Ads Intelligence Dashboard — 메인 앱
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   LayoutDashboard,
   Megaphone,
@@ -15,6 +15,7 @@ import {
   ShoppingBag,
   PenTool,
   ListChecks,
+  FileSearch,
 } from "lucide-react";
 import DashboardSummary from "./components/Dashboard";
 import AdPerformanceTable from "./components/AdPerformanceTable";
@@ -29,21 +30,26 @@ import AdLibraryReviewPage from "./components/AdLibraryReview";
 import ProductReviewAnalysisPage from "./components/ProductReviewAnalysis";
 import AdCopyGeneratorPage from "./components/AdCopyGenerator";
 import ActionQueue from "./components/ActionQueue";
+import PostMortem from "./components/PostMortem";
 import {
   Campaign,
   AnalysisResult,
   Competitor,
   TrendsData,
   DatePeriod,
+  CustomDateRange,
   MetaBusiness,
   MetaAdAccount,
   fetchCampaigns,
   fetchCampaignsByPeriod,
+  fetchCampaignsByCustomRange,
   fetchCampaignsByAccount,
+  fetchCampaignsByAccountCustomRange,
   fetchCompetitors,
   fetchTrends,
   analyzeAll,
   judgeAllCampaigns,
+  judgeAllCampaignsByCustomRange,
   CampaignJudgment,
   JudgeSummary,
   fetchMetaBusinesses,
@@ -51,7 +57,7 @@ import {
   fetchMetaAdAccounts,
 } from "./lib/api";
 
-type Page = "dashboard" | "campaigns" | "competitors" | "trends" | "ad-library" | "product-reviews" | "ad-copy" | "actions" | "settings";
+type Page = "dashboard" | "campaigns" | "competitors" | "trends" | "ad-library" | "product-reviews" | "ad-copy" | "actions" | "postmortem" | "settings";
 
 const NAV_ITEMS: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
   { page: "dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -62,6 +68,7 @@ const NAV_ITEMS: { page: Page; label: string; icon: typeof LayoutDashboard }[] =
   { page: "product-reviews", label: "Reviews", icon: ShoppingBag },
   { page: "ad-copy", label: "Ad Copy", icon: PenTool },
   { page: "actions", label: "Actions", icon: ListChecks },
+  { page: "postmortem", label: "Post-Mortem", icon: FileSearch },
   { page: "settings", label: "Settings", icon: SettingsIcon },
 ];
 
@@ -78,6 +85,7 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [dateRange, setDateRange] = useState<DatePeriod>("30d");
+  const [customDateRange, setCustomDateRange] = useState<CustomDateRange | null>(null);
   const [activeOnly, setActiveOnly] = useState(true);
   const [businesses, setBusinesses] = useState<MetaBusiness[]>([]);
   const [selectedBusinessId, setSelectedBusinessId] = useState<string>("");
@@ -193,7 +201,10 @@ export default function App() {
     }
   }, []);
 
+  const initRef = useRef(false);
   useEffect(() => {
+    if (initRef.current) return;
+    initRef.current = true;
     const init = async () => {
       // 비즈니스/광고계정 먼저 로드 → 기본값 설정 후 캠페인 로드
       await loadBusinesses();
@@ -243,6 +254,7 @@ export default function App() {
 
   const handleDateRangeChange = async (period: DatePeriod) => {
     setDateRange(period);
+    setCustomDateRange(null); // 프리셋 선택 시 커스텀 초기화
     await loadCampaigns(period);
     // 기간 변경 시 판단 데이터도 해당 기간으로 자동 리프레시
     try {
@@ -252,6 +264,34 @@ export default function App() {
       setJudgeSummary(result.summary || null);
     } catch (err) {
       console.error("Failed to refresh judgments for period:", err);
+    } finally {
+      setJudgingAll(false);
+    }
+  };
+
+  const handleCustomDateRangeChange = async (range: CustomDateRange) => {
+    setDateRange("custom");
+    setCustomDateRange(range);
+    setLoadingCampaigns(true);
+    try {
+      const acct = selectedAccountId;
+      const data = acct
+        ? await fetchCampaignsByAccountCustomRange(range.since, range.until, acct).catch(() => fetchCampaignsByCustomRange(range.since, range.until))
+        : await fetchCampaignsByCustomRange(range.since, range.until);
+      setCampaigns(data);
+    } catch (err) {
+      console.error("Failed to load campaigns by custom range:", err);
+    } finally {
+      setLoadingCampaigns(false);
+    }
+    // 판단도 커스텀 기간으로 리프레시
+    try {
+      setJudgingAll(true);
+      const result = await judgeAllCampaignsByCustomRange(range.since, range.until);
+      setJudgments(result.judgments || []);
+      setJudgeSummary(result.summary || null);
+    } catch (err) {
+      console.error("Failed to refresh judgments for custom range:", err);
     } finally {
       setJudgingAll(false);
     }
@@ -284,6 +324,8 @@ export default function App() {
               adAccounts={adAccounts}
               selectedAccountId={selectedAccountId}
               onAccountChange={handleAccountChange}
+              customDateRange={customDateRange}
+              onCustomDateRangeChange={handleCustomDateRangeChange}
             />
             <AdPerformanceTable campaigns={filteredCampaigns} onEdit={setEditingCampaign} loading={loadingCampaigns} />
             <AIRecommendations results={analysisResults} loading={analyzingAll} onAnalyzeAll={handleAnalyzeAll} judgments={judgments} judgeSummary={judgeSummary} judgingLoading={judgingAll} onJudgeAll={handleJudgeAll} />
@@ -319,6 +361,8 @@ export default function App() {
         return <AdCopyGeneratorPage />;
       case "actions":
         return <ActionQueue />;
+      case "postmortem":
+        return <PostMortem />;
       case "settings":
         return <Settings />;
     }

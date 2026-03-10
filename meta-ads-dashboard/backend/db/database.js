@@ -491,7 +491,66 @@ function initTables() {
       last_updated TEXT DEFAULT (datetime('now')),
       UNIQUE(action_type, diagnosis_stage)
     );
+
+    CREATE TABLE IF NOT EXISTS postmortem_lessons (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      root_cause TEXT NOT NULL,
+      lesson_type TEXT NOT NULL,
+      description TEXT NOT NULL,
+      evidence_json TEXT,
+      campaign_count INTEGER DEFAULT 1,
+      confidence TEXT DEFAULT 'low',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
   `);
+
+  // ─── 성장형 학습 시스템: improvement_log 컨텍스트 컬럼 ───
+  addColumnIfNotExists("improvement_log", "action_queue_id", "INTEGER");
+  addColumnIfNotExists("improvement_log", "root_cause", "TEXT");
+  addColumnIfNotExists("improvement_log", "funnel_stage", "TEXT");
+  addColumnIfNotExists("improvement_log", "strategy_applied", "TEXT");
+  addColumnIfNotExists("improvement_log", "change_detail", "TEXT");
+
+  // ─── 실시간 누적 측정: improvement_log 판정 상태 컬럼 ───
+  addColumnIfNotExists("improvement_log", "verdict_phase", "TEXT DEFAULT 'pending'");
+  addColumnIfNotExists("improvement_log", "data_points", "INTEGER DEFAULT 0");
+  addColumnIfNotExists("improvement_log", "lesson_recorded_at", "TEXT");
+
+  // ─── 성장형 학습 시스템: action_effectiveness 세분화 컬럼 ───
+  addColumnIfNotExists("action_effectiveness", "root_cause", "TEXT");
+  addColumnIfNotExists("action_effectiveness", "strategy", "TEXT");
+  addColumnIfNotExists("action_effectiveness", "context_json", "TEXT");
+
+  // ─── 실시간 누적 측정: action_effectiveness 시계열 컬럼 ───
+  addColumnIfNotExists("action_effectiveness", "avg_days_to_effect", "REAL DEFAULT 0");
+  addColumnIfNotExists("action_effectiveness", "avg_stability_score", "REAL DEFAULT 0");
+
+  // ─── 실시간 누적 측정: 일별 측정 데이터 축적 테이블 ───
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS improvement_daily_metrics (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      improvement_log_id INTEGER NOT NULL,
+      campaign_id INTEGER NOT NULL,
+      day_number INTEGER NOT NULL,
+      snapshot_date TEXT NOT NULL,
+      roas REAL, ctr REAL, cpc REAL,
+      spend REAL, revenue REAL, purchases INTEGER,
+      roas_change REAL,
+      ctr_change REAL,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(improvement_log_id, snapshot_date)
+    );
+  `);
+
+  // ─── 기존 측정 완료 데이터 마이그레이션: verdict_phase = 'final' ───
+  try {
+    db.prepare(`
+      UPDATE improvement_log
+      SET verdict_phase = 'final', lesson_recorded_at = measured_at
+      WHERE after_roas IS NOT NULL AND (verdict_phase IS NULL OR verdict_phase = 'pending')
+    `).run();
+  } catch { /* 첫 실행 시 컬럼이 아직 없으면 무시 */ }
 }
 
 function addColumnIfNotExists(table, column, type) {

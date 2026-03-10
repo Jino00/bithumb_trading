@@ -306,10 +306,16 @@ router.get("/businesses/:businessId/ad-accounts", async (req, res) => {
 router.get("/insights", async (req, res) => {
   try {
     const db = getDb();
-    const period = req.query.period || "30d";
-    const validPeriods = ["1d", "7d", "15d", "30d"];
-    if (!validPeriods.includes(period)) {
-      return res.status(400).json({ error: `Invalid period. Use: ${validPeriods.join(", ")}` });
+    const since = req.query.since; // "YYYY-MM-DD" (커스텀 달력)
+    const until = req.query.until; // "YYYY-MM-DD" (커스텀 달력)
+    const isCustomRange = since && until;
+
+    const period = isCustomRange ? "custom" : (req.query.period || "30d");
+    if (!isCustomRange) {
+      const validPeriods = ["1d", "7d", "15d", "30d"];
+      if (!validPeriods.includes(period)) {
+        return res.status(400).json({ error: `Invalid period. Use: ${validPeriods.join(", ")} or since/until params` });
+      }
     }
 
     const cred = db.prepare("SELECT access_token, selected_ad_account_id FROM meta_credentials WHERE user_id = 'default'").get();
@@ -324,14 +330,29 @@ router.get("/insights", async (req, res) => {
       return res.json(manualCampaigns);
     }
 
-    const result = await fetchAccountInsights(cred.access_token, adAccountId, period);
+    const result = isCustomRange
+      ? await fetchAccountInsights(cred.access_token, adAccountId, "30d", { since, until })
+      : await fetchAccountInsights(cred.access_token, adAccountId, period);
     if (result.error) {
       return res.status(400).json({ error: result.error });
     }
 
+    // 커스텀 범위일 때 일수 계산 (mapAccountInsightToSchema에 전달)
+    const effectivePeriod = isCustomRange
+      ? `${Math.max(1, Math.ceil((new Date(until) - new Date(since)) / 86400000) + 1)}d`
+      : period;
+
+    // 로컬 DB에서 캠페인 상태 조회 (pause 실행 즉시 반영용)
+    const statusMap = {};
+    const dbCampaigns = db.prepare("SELECT meta_campaign_id, status FROM campaigns WHERE source = 'meta'").all();
+    for (const c of dbCampaigns) {
+      statusMap[c.meta_campaign_id] = c.status;
+    }
+
     const metaCampaigns = (result.data || []).map((insight, idx) => ({
       id: 10000 + idx,
-      ...mapAccountInsightToSchema(insight, period),
+      ...mapAccountInsightToSchema(insight, effectivePeriod),
+      status: statusMap[insight.campaign_id] || "active",
       ai_verdict: null,
       ai_recommendation: null,
       ai_fix_type: null,

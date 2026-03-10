@@ -11,6 +11,7 @@ import { getBenchmarks } from "./trend-intelligence.js";
 import { sendReviewNotification } from "./notification.js";
 import { getExternalBenchmarks, adjustThresholdWithTrend, getAlgorithmAlerts } from "./trend-bridge.js";
 import { calcWmaMetrics } from "./wma-metrics.js";
+import { calcEarlySignalScore, isEarlySignalCandidate, classifyEarlyGrade } from "./early-signal.js";
 
 // ─── 액션 생성 규칙 기본 상수 (벤치마크 없을 때 fallback, 백테스트 결과 기반) ───
 const MIN_DAILY_BUDGET = 20000;
@@ -109,6 +110,35 @@ export async function runDailyReview() {
     campaigns = insights7d.map((i) => mapAccountInsightToSchema(i, "7d"));
   }
 
+  // 3b. Early Signal Detection: 1-3일차 신규 캠페인 분석
+  const earlySignalResults = [];
+  if (wmaApplied) {
+    for (const c of campaigns) {
+      if (!isEarlySignalCandidate(c._wma_day_count, c._wma_insufficient)) continue;
+
+      const esResult = calcEarlySignalScore({
+        clicks: c.clicks,
+        impressions: c.impressions,
+        landing_page_views: c.landing_page_views,
+        content_views: c.content_views,
+        add_to_cart_count: c.add_to_cart_count,
+        initiate_checkout_count: c.initiate_checkout_count,
+        purchases: c.purchase_count,
+        spend: c.total_spend,
+        revenue: c.revenue,
+        frequency: c.frequency,
+      }, c._wma_day_count);
+
+      earlySignalResults.push({ campaign: c, ...esResult });
+    }
+    if (earlySignalResults.length > 0) {
+      console.log(`[DailyReview] Early signals: ${earlySignalResults.length} young campaigns analyzed`);
+      for (const es of earlySignalResults) {
+        console.log(`  ${es.emoji} ${es.campaign.name} — Day ${es.dayCount} | Score ${es.score} (${es.grade})${es.isEarlyKill ? " ← KILL" : ""}`);
+      }
+    }
+  }
+
   // 4. 원가 데이터 조인
   const costs = db.prepare("SELECT campaign_name, cost_price FROM product_costs").all();
   const costMap = Object.fromEntries(costs.map((c) => [c.campaign_name, c.cost_price]));
@@ -133,27 +163,36 @@ export async function runDailyReview() {
   const dailyBudgets = await fetchDailyBudgets(creds.access_token, campaigns);
 
   // 7. 액션 생성
-  const actions = generateActions(judgments, dailyBudgets);
+  const regularActions = generateActions(judgments, dailyBudgets);
+
+  // 7b. Early Signal 액션 생성
+  const earlyActions = generateEarlyActions(earlySignalResults);
+  const allActions = [...regularActions, ...earlyActions];
+
+  if (earlyActions.length > 0) {
+    console.log(`[DailyReview] Early signal actions: ${earlyActions.length} (${earlyActions.filter(a => a.action_type === "early_kill").length} kill, ${earlyActions.filter(a => a.action_type === "early_warning").length} warning)`);
+  }
 
   // 8. DB 저장
-  const runId = saveReviewRun(db, today, campaigns.length, actions, summary);
-  saveActions(db, runId, actions);
+  const runId = saveReviewRun(db, today, campaigns.length, allActions, summary);
+  saveActions(db, runId, allActions);
 
-  console.log(`[DailyReview] Review complete: ${campaigns.length} campaigns, ${actions.length} actions generated`);
+  console.log(`[DailyReview] Review complete: ${campaigns.length} campaigns, ${allActions.length} actions generated (${regularActions.length} regular + ${earlyActions.length} early)`);
 
   // 9. 알림 발송 (항상 — 아침 브리핑)
   try {
     await sendReviewNotification({
       date: today,
       total_campaigns: campaigns.length,
-      actions,
+      actions: allActions,
       summary,
+      early_signals: earlySignalResults,
     });
   } catch (err) {
     console.error("[DailyReview] Notification failed:", err.message);
   }
 
-  return { run_id: runId, total_campaigns: campaigns.length, actions_generated: actions.length, actions };
+  return { run_id: runId, total_campaigns: campaigns.length, actions_generated: allActions.length, actions: allActions };
 }
 
 /**
@@ -461,6 +500,61 @@ function saveReviewRun(db, date, totalCampaigns, actions, summary) {
   return result.lastInsertRowid;
 }
 
+/**
+ * Early Signal 결과로 early_warning / early_kill 액션 생성
+ */
+function generateEarlyActions(earlySignalResults) {
+  const actions = [];
+
+  for (const result of earlySignalResults) {
+    const { campaign: c, score, grade, emoji, signals, recommendations, isEarlyKill, reason } = result;
+    const earlySignalJson = JSON.stringify({ score, grade, signals: signals.filter((s) => !s.skipped) });
+
+    if (isEarlyKill) {
+      actions.push({
+        campaign_name: c.name,
+        meta_campaign_id: String(c.meta_campaign_id),
+        action_type: "early_kill",
+        current_value: `Day ${c._wma_day_count} | Score ${score}`,
+        proposed_value: "PAUSED",
+        reason: `[ES-KILL] ${reason}`,
+        verdict: "PAUSE",
+        score,
+        adset_id: null,
+        recommendations,
+        funnel_diagnosis: [],
+        smart_recommendations: [],
+        benchmark_comparison: null,
+        profitability: null,
+        trend_direction: null,
+        early_signal_json: earlySignalJson,
+      });
+    } else if (grade === "At Risk" || grade === "Watch") {
+      actions.push({
+        campaign_name: c.name,
+        meta_campaign_id: String(c.meta_campaign_id),
+        action_type: "early_warning",
+        current_value: `Day ${c._wma_day_count} | Score ${score}`,
+        proposed_value: grade,
+        reason: `[ES] ${grade === "At Risk" ? "위험 신호" : "관찰 필요"}: ${reason}`,
+        verdict: grade === "At Risk" ? "MODIFY" : "MAINTAIN",
+        score,
+        adset_id: null,
+        recommendations,
+        funnel_diagnosis: [],
+        smart_recommendations: [],
+        benchmark_comparison: null,
+        profitability: null,
+        trend_direction: null,
+        early_signal_json: earlySignalJson,
+      });
+    }
+    // Promising → 액션 없음 (알림 요약에만 포함)
+  }
+
+  return actions;
+}
+
 function saveActions(db, runId, actions) {
   // 중복 방지: 같은 캠페인에 같은 action_type으로 pending 상태인 액션이 이미 있으면 스킵
   const checkDup = db.prepare(`
@@ -472,8 +566,8 @@ function saveActions(db, runId, actions) {
       review_run_id, campaign_name, meta_campaign_id, action_type,
       current_value, proposed_value, reason, verdict, score, adset_id,
       recommendations_json, funnel_diagnosis_json, smart_recommendations_json,
-      benchmark_comparison_json, profitability_json, trend_direction
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      benchmark_comparison_json, profitability_json, trend_direction, early_signal_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   let skipped = 0;
   const insertMany = db.transaction((items) => {
@@ -494,6 +588,7 @@ function saveActions(db, runId, actions) {
         a.benchmark_comparison ? JSON.stringify(a.benchmark_comparison) : null,
         a.profitability ? JSON.stringify(a.profitability) : null,
         a.trend_direction || null,
+        a.early_signal_json || null,
       );
     }
   });

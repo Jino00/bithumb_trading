@@ -137,13 +137,16 @@ const META_STATUS_MAP = {
   ARCHIVED: "archived",
 };
 
-export async function fetchAccountInsights(accessToken, adAccountId, period = "30d") {
+export async function fetchAccountInsights(accessToken, adAccountId, period = "30d", { since: customSince, until: customUntil } = {}) {
   try {
     const accountId = adAccountId.replace("act_", "");
     const fields = "campaign_id,campaign_name,impressions,clicks,spend,ctr,cpc,frequency,cpm,actions,action_values,purchase_roas";
 
     let dateParam;
-    if (period === "15d") {
+    if (customSince && customUntil) {
+      // 커스텀 날짜 범위 (달력 선택)
+      dateParam = `time_range=${JSON.stringify({ since: customSince, until: customUntil })}`;
+    } else if (period === "15d") {
       const until = new Date().toISOString().split("T")[0];
       const since = new Date(Date.now() - 15 * 86400000).toISOString().split("T")[0];
       dateParam = `time_range=${JSON.stringify({ since, until })}`;
@@ -287,7 +290,7 @@ export function mapMetaCampaignToSchema(campaign, insights, days = 30) {
 }
 
 export function mapAccountInsightToSchema(insight, period = "30d") {
-  const days = PERIOD_DAYS[period] || 30;
+  const days = PERIOD_DAYS[period] || parseInt(period, 10) || 30;
   const spend = parseFloat(insight.spend || "0");
   const impressions = parseInt(insight.impressions || "0", 10);
   const clicks = parseInt(insight.clicks || "0", 10);

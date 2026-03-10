@@ -3,7 +3,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { DollarSign, MousePointerClick, Target, Eye, Loader2, Building2, ChevronDown, TrendingUp, ShoppingCart, Wallet } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
-import { Campaign, DatePeriod, MetaBusiness, MetaAdAccount, fetchProfitability, ProfitabilityData } from "../lib/api";
+import { Campaign, DatePeriod, CustomDateRange, MetaBusiness, MetaAdAccount, fetchProfitability, fetchProfitabilityByCustomRange, ProfitabilityData } from "../lib/api";
+import DateRangePicker from "./DateRangePicker";
 import { formatCurrency, formatNumber } from "../lib/utils";
 
 const DATE_RANGE_OPTIONS: { value: DatePeriod; label: string }[] = [
@@ -26,6 +27,8 @@ interface Props {
   adAccounts: MetaAdAccount[];
   selectedAccountId: string;
   onAccountChange: (accountId: string) => void;
+  customDateRange: CustomDateRange | null;
+  onCustomDateRangeChange: (range: CustomDateRange) => void;
 }
 
 function KpiCard({ icon: Icon, label, value, subtext, color }: {
@@ -53,18 +56,20 @@ function KpiCard({ icon: Icon, label, value, subtext, color }: {
 
 const COLORS = ["#10B981", "#F59E0B", "#EF4444", "#6366F1", "#8B5CF6"];
 
-export default function DashboardSummary({ campaigns, dateRange, onDateRangeChange, loading, activeOnly, onActiveOnlyChange, businesses, selectedBusinessId, onBusinessChange, adAccounts, selectedAccountId, onAccountChange }: Props) {
+export default function DashboardSummary({ campaigns, dateRange, onDateRangeChange, loading, activeOnly, onActiveOnlyChange, businesses, selectedBusinessId, onBusinessChange, adAccounts, selectedAccountId, onAccountChange, customDateRange, onCustomDateRangeChange }: Props) {
   // 수익성 데이터는 백엔드 API에서 가져옴 (프론트 재계산 금지 — SSOT)
   const [profitData, setProfitData] = useState<ProfitabilityData | null>(null);
 
   const loadProfitability = useCallback(async () => {
     try {
-      const data = await fetchProfitability(dateRange);
+      const data = customDateRange
+        ? await fetchProfitabilityByCustomRange(customDateRange.since, customDateRange.until)
+        : await fetchProfitability(dateRange);
       setProfitData(data);
     } catch {
       setProfitData(null);
     }
-  }, [dateRange]);
+  }, [dateRange, customDateRange]);
 
   useEffect(() => {
     loadProfitability();
@@ -150,7 +155,7 @@ export default function DashboardSummary({ campaigns, dateRange, onDateRangeChan
                   onClick={() => onDateRangeChange(value)}
                   disabled={loading}
                   className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
-                    dateRange === value
+                    dateRange === value && dateRange !== "custom"
                       ? "bg-blue-600 text-white font-medium"
                       : "text-gray-600 hover:bg-gray-100"
                   } ${loading ? "opacity-50 cursor-not-allowed" : ""}`}
@@ -159,6 +164,12 @@ export default function DashboardSummary({ campaigns, dateRange, onDateRangeChan
                 </button>
               ))}
             </div>
+            <DateRangePicker
+              value={customDateRange}
+              onChange={onCustomDateRangeChange}
+              disabled={loading}
+              isActive={dateRange === "custom"}
+            />
             {loading && <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />}
           </div>
           <label className="flex items-center gap-1.5 cursor-pointer select-none">

@@ -21,7 +21,7 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors({ origin: ["http://localhost:5173", "http://127.0.0.1:5173", "http://100.97.123.35:5173"] }));
+app.use(cors({ origin: ["http://localhost:5173", "http://127.0.0.1:5173", "http://100.97.123.35:5173", "http://172.30.1.6:5173"] }));
 app.use(express.json());
 
 // DB 초기화

@@ -8,6 +8,7 @@ import {
 } from "./meta-api.js";
 import { sendViaOpenClaw } from "./notification.js";
 import { getStrategyModifiers } from "./trend-bridge.js";
+import { upsertLesson } from "./postmortem-service.js";
 
 // ─── 근본 원인 분류 (daily-review 규칙 코드 → 구조화) ───
 
@@ -30,7 +31,7 @@ const DEFAULT_STRATEGIES = {
 
 const MAX_ATTEMPTS = 2;
 const MAX_TRACKING_DAYS = 30;
-const MEASUREMENT_DAYS = 7;
+const MIN_DAYS_FOR_ACTION = 3;  // verdict_phase 기반: 예비판정 3일+, 조기감지는 day 1부터
 
 // ─── 공개 함수 ───
 
@@ -144,51 +145,46 @@ export function getAutoImprovementDetail(id) {
   return db.prepare("SELECT * FROM paused_campaign_improvements WHERE id = ?").get(id);
 }
 
-// ─── Phase 1: 이전 시도 측정 ───
+// ─── Phase 1: 이전 시도 측정 (verdict_phase 기반 3단계 대응) ───
 
 async function measurePreviousAttempts(db, results) {
-  // 'attempted' 상태이고 마지막 시도로부터 7일 경과한 레코드
+  // snapshot-service의 실시간 누적 측정이 verdict_phase를 자동 갱신하므로
+  // 여기서는 verdict_phase를 읽어서 3단계로 대응한다
   const candidates = db.prepare(`
-    SELECT * FROM paused_campaign_improvements
-    WHERE status = 'attempted'
-      AND last_attempt_at <= datetime('now', '-${MEASUREMENT_DAYS} days')
+    SELECT p.*, il.id AS log_id, il.data_points, il.verdict_phase, il.result_verdict
+    FROM paused_campaign_improvements p
+    LEFT JOIN improvement_log il
+      ON il.campaign_id = p.campaign_id
+      AND il.created_at >= p.last_attempt_at
+      AND il.verdict_phase IS NOT NULL
+    WHERE p.status = 'attempted'
+    ORDER BY p.last_attempt_at ASC
   `).all();
 
   for (const rec of candidates) {
     try {
-      // improvement_log에서 이 캠페인의 최신 미측정 로그 확인
-      const log = db.prepare(`
-        SELECT * FROM improvement_log
-        WHERE campaign_id = ? AND after_roas IS NULL
-        ORDER BY created_at DESC LIMIT 1
-      `).get(rec.campaign_id);
-
-      if (!log) {
-        // 로그가 없으면 campaign의 현재 ROAS로 직접 측정
-        const campaign = db.prepare("SELECT roas, ctr FROM campaigns WHERE id = ?").get(rec.campaign_id);
-        if (!campaign) continue;
-
-        // before_roas는 원래 정지 시점 ROAS → 현재 ROAS와 비교
-        const beforeRoas = rec.original_budget > 0 ? 0 : 0;  // 정지 시점 ROAS는 improvement_log에 있음
-        evaluateAndAct(db, rec, campaign.roas, results);
-        continue;
-      }
-
-      // 현재 ROAS 조회
-      const campaign = db.prepare("SELECT roas, ctr FROM campaigns WHERE id = ?").get(rec.campaign_id);
+      const campaign = db.prepare("SELECT roas FROM campaigns WHERE id = ?").get(rec.campaign_id);
       if (!campaign) continue;
 
-      // improvement_log 업데이트
-      const verdict = getVerdict(log.before_roas, campaign.roas);
-      db.prepare(`
-        UPDATE improvement_log
-        SET after_roas = ?, after_ctr = ?, result_verdict = ?, measured_at = datetime('now')
-        WHERE id = ?
-      `).run(campaign.roas, campaign.ctr, verdict, log.id);
+      // 3단계 대응: verdict_phase에 따라 즉시 조치 여부 결정
+      if (rec.verdict_phase === "final") {
+        // 최종 확정 → 즉시 evaluateAndAct
+        results.measured.push({ campaign: rec.campaign_name, verdict: rec.result_verdict, phase: "final" });
+        evaluateAndAct(db, rec, campaign.roas, results);
 
-      results.measured.push({ campaign: rec.campaign_name, verdict, before: log.before_roas, after: campaign.roas });
+      } else if (rec.verdict_phase === "early_signal") {
+        // 조기 감지 (과거 패턴 80%+ 신뢰도) → 즉시 조치 가능
+        results.measured.push({ campaign: rec.campaign_name, verdict: rec.result_verdict, phase: "early_signal" });
+        evaluateAndAct(db, rec, campaign.roas, results);
 
-      evaluateAndAct(db, rec, campaign.roas, results);
+      } else if (rec.verdict_phase === "preliminary" && (rec.data_points || 0) >= MIN_DAYS_FOR_ACTION) {
+        // 예비 판정 (day 3+) + 강한 신호 → 조치 가능
+        if (rec.result_verdict === "improved" || rec.result_verdict === "worsened") {
+          results.measured.push({ campaign: rec.campaign_name, verdict: rec.result_verdict, phase: "preliminary" });
+          evaluateAndAct(db, rec, campaign.roas, results);
+        }
+      }
+      // pending이면 아직 데이터 축적 중 → 아무 것도 안 함
     } catch (err) {
       console.error(`[AutoImprove] Measure failed for ${rec.campaign_name}:`, err.message);
       results.errors.push({ campaign: rec.campaign_name, phase: "measure", error: err.message });
@@ -199,6 +195,9 @@ async function measurePreviousAttempts(db, results) {
 function evaluateAndAct(db, rec, currentRoas, results) {
   const improved = currentRoas > 1.0;  // ROAS > 1.0 = 수익 전환
 
+  // 성장형 학습: 자동 개선 결과를 교훈으로 기록
+  recordAutoImprovementLesson(db, rec, currentRoas, improved);
+
   if (improved) {
     // 개선됨 → resolved
     db.prepare("UPDATE paused_campaign_improvements SET status = 'resolved', resolved_at = datetime('now'), updated_at = datetime('now') WHERE id = ?")
@@ -206,7 +205,6 @@ function evaluateAndAct(db, rec, currentRoas, results) {
     results.improved.push({ campaign: rec.campaign_name, roas: currentRoas });
   } else if (rec.attempt_count < rec.max_attempts) {
     // 악화/변동 없음 + 시도 여유 있음 → 다시 정지 + 2차 시도 예약
-    // 먼저 캠페인 다시 정지 (Meta API)
     db.prepare("UPDATE paused_campaign_improvements SET status = 'cooling', updated_at = datetime('now') WHERE id = ?")
       .run(rec.id);
     results.retried.push({ campaign: rec.campaign_name, attempt: rec.attempt_count + 1 });
@@ -215,6 +213,39 @@ function evaluateAndAct(db, rec, currentRoas, results) {
     db.prepare("UPDATE paused_campaign_improvements SET status = 'manual_review', updated_at = datetime('now') WHERE id = ?")
       .run(rec.id);
     results.manual.push({ campaign: rec.campaign_name, reason: `${rec.max_attempts}회 시도 후 미개선` });
+  }
+}
+
+/**
+ * 성장형 학습: 자동 개선 시도 결과를 교훈으로 자동 기록
+ */
+function recordAutoImprovementLesson(db, rec, currentRoas, improved) {
+  try {
+    const strategyJson = rec.attempt_count === 0 ? rec.strategy_1st : rec.strategy_2nd;
+    const strategy = strategyJson ? JSON.parse(strategyJson).join(" + ") : "unknown";
+    const lessonType = improved ? "what_worked" : "what_failed";
+    const description = improved
+      ? `자동 개선 ${strategy} 적용 → ROAS ${currentRoas.toFixed(2)}x로 회복 (${rec.root_cause})`
+      : `자동 개선 ${strategy} 적용 → ROAS ${currentRoas.toFixed(2)}x, 미개선 (${rec.root_cause})`;
+
+    upsertLesson(db, {
+      root_cause: rec.root_cause,
+      lesson_type: lessonType,
+      description,
+      evidence_json: JSON.stringify({
+        action_type: `auto_improve_attempt${rec.attempt_count + 1}`,
+        strategy,
+        campaign_name: rec.campaign_name,
+        current_roas: currentRoas,
+        attempt: rec.attempt_count + 1,
+      }),
+      campaign_count: 1,
+      confidence: "low",
+    });
+
+    console.log(`[Learning] 자동 개선 교훈: ${lessonType} — ${description}`);
+  } catch (err) {
+    console.warn("[Learning] recordAutoImprovementLesson failed:", err.message);
   }
 }
 
@@ -347,6 +378,22 @@ function parseRootCause(reason) {
 function pickStrategies(db, rootCauseCode) {
   const defaults = DEFAULT_STRATEGIES[rootCauseCode] || DEFAULT_STRATEGIES.roas_low;
 
+  // ─── 성장형 학습: postmortem_lessons에서 교훈 반영 ───
+  let lessonOverrides = null;
+  try {
+    const lessons = db.prepare(
+      "SELECT lesson_type, description, confidence, evidence_json FROM postmortem_lessons WHERE root_cause = ? ORDER BY campaign_count DESC LIMIT 10"
+    ).all(rootCauseCode);
+
+    if (lessons.length) {
+      console.log(`[AutoImprove] 포스트모템 교훈 ${lessons.length}건 참고 (${rootCauseCode})`);
+      lessonOverrides = applyLessonOverrides(defaults, lessons, rootCauseCode);
+    }
+  } catch { /* postmortem_lessons 테이블 없을 수 있음 */ }
+
+  // 교훈에서 전략 오버라이드가 나왔으면 사용
+  if (lessonOverrides) return lessonOverrides;
+
   // action_effectiveness에서 성공률 데이터 확인
   try {
     const rows = db.prepare(
@@ -358,7 +405,6 @@ function pickStrategies(db, rootCauseCode) {
     try { trendMods = getStrategyModifiers(); } catch { /* ignore */ }
 
     if (rows.length < 2) {
-      // 학습 데이터 부족 → 트렌드만으로 전략 순서 조정
       if (trendMods?.prefer_broad_targeting && (rootCauseCode === "roas_low_cpc_high" || rootCauseCode === "cpc_high")) {
         console.log(`[AutoImprove] 트렌드 기반: Broad 타겟 우선 (${rootCauseCode})`);
         return {
@@ -374,8 +420,6 @@ function pickStrategies(db, rootCauseCode) {
     const targetSuccess = rows.find(r => r.action_type === "targeting_broaden")?.success_rate || 0;
 
     if (rootCauseCode === "roas_low_cpc_high" || rootCauseCode === "cpc_high") {
-      // CPC 관련 → 타겟 성공률이 높으면 1차에 타겟
-      // 트렌드가 Broad 타겟 추천이면 성공률 기준 완화 (0.5 → 0.3)
       const threshold = trendMods?.prefer_broad_targeting ? 0.3 : 0.5;
       if (targetSuccess > budgetSuccess && targetSuccess > threshold) {
         return {
@@ -389,6 +433,68 @@ function pickStrategies(db, rootCauseCode) {
   } catch {
     return defaults;
   }
+}
+
+/**
+ * 성장형 학습: 교훈을 기반으로 전략 순서 조정
+ * what_failed → 해당 전략 후순위 / what_worked → 해당 전략 우선
+ */
+function applyLessonOverrides(defaults, lessons, rootCauseCode) {
+  const failed = lessons.filter(l => l.lesson_type === "what_failed" && (l.confidence === "high" || l.confidence === "medium"));
+  const worked = lessons.filter(l => l.lesson_type === "what_worked" && (l.confidence === "high" || l.confidence === "medium"));
+
+  if (failed.length === 0 && worked.length === 0) return null;
+
+  // 실패한 전략들의 action_type 수집
+  const failedActions = new Set();
+  for (const f of failed) {
+    try {
+      const evidence = JSON.parse(f.evidence_json || "{}");
+      if (evidence.action_type) failedActions.add(evidence.action_type);
+      if (evidence.strategy) {
+        for (const s of evidence.strategy.split(" + ")) failedActions.add(s.trim());
+      }
+    } catch { /* ignore */ }
+  }
+
+  // 성공한 전략들의 action_type 수집
+  const workedActions = new Set();
+  for (const w of worked) {
+    try {
+      const evidence = JSON.parse(w.evidence_json || "{}");
+      if (evidence.action_type) workedActions.add(evidence.action_type);
+      if (evidence.strategy) {
+        for (const s of evidence.strategy.split(" + ")) workedActions.add(s.trim());
+      }
+    } catch { /* ignore */ }
+  }
+
+  // 기본 전략의 1차/2차를 조정
+  let first = defaults.first ? [...defaults.first] : null;
+  let second = defaults.second ? [...defaults.second] : null;
+
+  let modified = false;
+
+  // 1차 전략에 실패 전략이 있으면 → 1차에서 제거, 2차로 이동
+  if (first) {
+    const hasFailedInFirst = first.some(s => failedActions.has(s));
+    if (hasFailedInFirst && second) {
+      console.log(`[AutoImprove] 교훈 반영: 1차 전략에서 실패 이력 감지, 2차로 교체`);
+      [first, second] = [second, first];
+      modified = true;
+    }
+  }
+
+  // CPC 관련 root_cause에서 targeting_broaden이 성공한 적 있으면 우선
+  if ((rootCauseCode === "roas_low_cpc_high" || rootCauseCode === "cpc_high") && workedActions.has("targeting_broaden")) {
+    if (first && !first.includes("targeting_broaden")) {
+      console.log(`[AutoImprove] 교훈 반영: targeting_broaden 성공 이력, 1차에 추가`);
+      first = ["targeting_broaden", ...first.filter(s => s !== "targeting_broaden")];
+      modified = true;
+    }
+  }
+
+  return modified ? { first, second } : null;
 }
 
 function getCampaignInternalId(db, metaCampaignId) {

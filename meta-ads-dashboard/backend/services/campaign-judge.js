@@ -5,6 +5,7 @@
 // ※ 학습 반영 (v2): blendThreshold()로 하드코딩 기준 → 동적 벤치마크 기준 점진적 전환
 import { getBenchmarks, getSmartRecommendations } from "./trend-intelligence.js";
 import { calcCampaignProfitability, calcProfitabilitySummary, roundN } from "./biz-metrics.js";
+import { getDb } from "../db/database.js";
 
 // ─── 학습 기반 동적 기준 유틸 ───
 
@@ -70,6 +71,12 @@ export function judgeCampaign(campaign, benchmarks = null) {
     // 퍼널 병목은 점수에도 영향
     if (diag.severity === "critical") score -= 10;
     else if (diag.severity === "warning") score -= 5;
+  }
+
+  // ─── 2.5단계: 성장형 학습 — 과거 교훈 기반 추천 강화 ───
+  const lessonsEnhanced = consultLessons(campaign, funnelDiagnosis);
+  if (lessonsEnhanced.length > 0) {
+    recommendations.unshift(...lessonsEnhanced);
   }
 
   // ─── 3단계: 최종 판정 ───
@@ -285,6 +292,59 @@ function diagnoseFunnel(campaign, benchmarks = null) {
   }
 
   return diagnoses;
+}
+
+// ─── 성장형 학습: 과거 교훈 참조 ───
+
+/**
+ * 캠페인의 현재 상태에 맞는 과거 교훈을 조회하여 추천 강화
+ * medium/high 신뢰도 교훈만 추천에 반영
+ */
+function consultLessons(campaign, funnelDiagnosis) {
+  try {
+    const db = getDb();
+    const lessons = db.prepare(`
+      SELECT * FROM postmortem_lessons
+      WHERE confidence IN ('high','medium')
+      ORDER BY campaign_count DESC LIMIT 10
+    `).all();
+
+    if (lessons.length === 0) return [];
+
+    const enhanced = [];
+    const { roas = 0, ctr = 0, cpc = 0, frequency = 0, purchase_count = 0 } = campaign;
+    const bottleneckStages = (funnelDiagnosis || [])
+      .filter(d => d.severity === "critical" || d.severity === "warning")
+      .map(d => d.stage);
+
+    for (const lesson of lessons) {
+      let relevant = false;
+      const evidence = JSON.parse(lesson.evidence_json || "{}");
+
+      // what_worked 교훈: 비슷한 상황이면 추천
+      if (lesson.lesson_type === "what_worked") {
+        if (lesson.root_cause === "roas_low" && roas < 1.5) relevant = true;
+        if (lesson.root_cause === "zero_purchases" && purchase_count === 0) relevant = true;
+        if (lesson.root_cause === "roas_low_cpc_high" && roas < 1.5 && cpc > 1500) relevant = true;
+        if (lesson.root_cause === "frequency_fatigue" && frequency > 3) relevant = true;
+      }
+
+      // what_failed 교훈: 같은 실수를 반복하지 않도록 경고
+      if (lesson.lesson_type === "what_failed") {
+        if (lesson.root_cause === "roas_low" && roas < 1.5) relevant = true;
+        if (lesson.root_cause === "zero_purchases" && purchase_count === 0) relevant = true;
+      }
+
+      if (relevant) {
+        const prefix = lesson.lesson_type === "what_worked" ? "[학습-성공]" : "[학습-경고]";
+        enhanced.push(`${prefix} ${lesson.description} (${lesson.campaign_count}건 근거, ${lesson.confidence})`);
+      }
+    }
+
+    return enhanced.slice(0, 3);  // 최대 3개 교훈만 추가
+  } catch {
+    return [];
+  }
 }
 
 // ─── 퍼널 각 단계별 세부 진단 함수 ───

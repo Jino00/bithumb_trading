@@ -195,6 +195,15 @@ router.get("/:id/improvement", (req, res) => {
     if (!log) return res.json({ measured: false, message: "Improvement log not found" });
 
     const measured = log.after_roas !== null && log.after_roas !== undefined;
+
+    // 실시간 누적 측정: 일별 측정 데이터 조회
+    const dailyMetrics = db.prepare(`
+      SELECT day_number, snapshot_date, roas, ctr, cpc, roas_change, ctr_change
+      FROM improvement_daily_metrics
+      WHERE improvement_log_id = ?
+      ORDER BY day_number ASC
+    `).all(log.id);
+
     res.json({
       measured,
       before_roas: log.before_roas,
@@ -204,6 +213,9 @@ router.get("/:id/improvement", (req, res) => {
       roas_change: measured ? Math.round((log.after_roas - log.before_roas) * 100) / 100 : null,
       ctr_change: measured && log.after_ctr ? Math.round((log.after_ctr - log.before_ctr) * 100) / 100 : null,
       result_verdict: log.result_verdict,
+      verdict_phase: log.verdict_phase || "pending",
+      data_points: log.data_points || 0,
+      daily_metrics: dailyMetrics,
       created_at: log.created_at,
       measured_at: log.measured_at,
     });
@@ -399,7 +411,7 @@ async function executeAction(db, action) {
   return { success: true, action_id: action.id, meta_response: result.data };
 }
 
-/** 실행 성공 후 improvement_log 자동 기록 (7일 뒤 자동 측정) */
+/** 실행 성공 후 improvement_log 자동 기록 + 풍부한 컨텍스트 (성장형 학습) */
 function autoLogImprovement(db, action) {
   try {
     const campaignRow = db.prepare(
@@ -412,12 +424,45 @@ function autoLogImprovement(db, action) {
       action.action_type,
       action.reason
     );
+    const logId = logResult.lastInsertRowid;
+
     // action_queue에 improvement_log_id 기록 (양방향 연결)
     db.prepare("UPDATE action_queue SET improvement_log_id = ? WHERE id = ?")
-      .run(logResult.lastInsertRowid, action.id);
+      .run(logId, action.id);
+
+    // 성장형 학습: 풍부한 컨텍스트 기록 (root_cause, funnel_stage, action_queue_id)
+    const rootCause = inferRootCauseFromReason(action.reason);
+    let funnelStage = null;
+    try {
+      const funnelJson = action.funnel_diagnosis_json ? JSON.parse(action.funnel_diagnosis_json) : [];
+      const critical = funnelJson.find(d => d.severity === "critical");
+      funnelStage = critical?.stage || funnelJson[0]?.stage || null;
+    } catch { /* ignore */ }
+
+    db.prepare(`
+      UPDATE improvement_log
+      SET action_queue_id = ?, root_cause = ?, funnel_stage = ?, strategy_applied = ?
+      WHERE id = ?
+    `).run(action.id, rootCause, funnelStage, action.action_type, logId);
   } catch (err) {
     console.warn("[Actions] improvement_log auto-create failed:", err.message);
   }
+}
+
+/** reason 텍스트에서 root_cause 코드 추론 */
+function inferRootCauseFromReason(reason) {
+  if (!reason) return "unknown";
+  const match = reason.match(/\[R(\d+b?)\]/);
+  if (match) {
+    const ruleMap = { R1: "roas_low", R1b: "roas_low", R2: "zero_purchases",
+      R3: "frequency_fatigue", R7: "roas_low_cpc_high" };
+    return ruleMap[`R${match[1]}`] || "unknown";
+  }
+  if (reason.includes("ROAS") && reason.includes("CPC")) return "roas_low_cpc_high";
+  if (reason.includes("구매 0건")) return "zero_purchases";
+  if (reason.includes("Frequency") || reason.includes("피로")) return "frequency_fatigue";
+  if (reason.includes("ROAS")) return "roas_low";
+  return "unknown";
 }
 
 function markFailed(db, actionId, error) {

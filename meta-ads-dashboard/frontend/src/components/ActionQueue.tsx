@@ -24,6 +24,8 @@ import {
 import {
   ActionQueueItem,
   FunnelDiagnosis,
+  EarlySignalData,
+  EarlySignalItem,
   ReviewRun,
   LearningStatus,
   ImprovementResult,
@@ -48,6 +50,8 @@ const ACTION_ICONS: Record<string, typeof Pause> = {
   budget_decrease: TrendingDown,
   targeting_broaden: Target,
   creative_refresh: Paintbrush,
+  early_warning: AlertTriangle,
+  early_kill: XCircle,
 };
 
 const ACTION_LABELS: Record<string, string> = {
@@ -57,6 +61,8 @@ const ACTION_LABELS: Record<string, string> = {
   budget_decrease: "예산 감축",
   targeting_broaden: "Broad 타겟 전환",
   creative_refresh: "소재 교체 필요",
+  early_warning: "🔮 조기 경고",
+  early_kill: "💀 조기 중단 권장",
 };
 
 const ACTION_COLORS: Record<string, string> = {
@@ -66,6 +72,8 @@ const ACTION_COLORS: Record<string, string> = {
   budget_decrease: "text-orange-600 bg-orange-50",
   targeting_broaden: "text-purple-600 bg-purple-50",
   creative_refresh: "text-pink-600 bg-pink-50",
+  early_warning: "text-amber-600 bg-amber-50",
+  early_kill: "text-red-700 bg-red-50",
 };
 
 const STATUS_BADGES: Record<string, { label: string; color: string }> = {
@@ -138,6 +146,7 @@ export default function ActionQueue() {
     setActionLoading((prev) => ({ ...prev, [id]: true }));
     try {
       await approveAction(id);
+      await executeAction(id);
       await loadData();
     } finally {
       setActionLoading((prev) => ({ ...prev, [id]: false }));
@@ -155,11 +164,15 @@ export default function ActionQueue() {
   };
 
   const handleApproveAll = async () => {
+    setExecutingAll(true);
     try {
       await approveAllActions();
+      await executeAllActions();
       await loadData();
     } catch (err) {
       console.error("Failed to approve all:", err);
+    } finally {
+      setExecutingAll(false);
     }
   };
 
@@ -271,9 +284,11 @@ export default function ActionQueue() {
             <div className="flex items-center gap-2">
               <button
                 onClick={handleApproveAll}
-                className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                disabled={executingAll}
+                className="flex items-center gap-1 px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
               >
-                전체 승인
+                {executingAll ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                {executingAll ? "실행 중..." : "전체 승인 & 실행"}
               </button>
             </div>
           </div>
@@ -541,6 +556,8 @@ function ActionCard({
   );
 
   const isManualRequired = action.action_type === "creative_refresh";
+  const isEarlySignal = action.action_type === "early_warning" || action.action_type === "early_kill";
+  const earlySignalData: EarlySignalData | null = isEarlySignal ? safeJsonParse<EarlySignalData | null>(action.early_signal_json, null) : null;
 
   // 실행 완료된 액션의 개선 결과 로드
   useEffect(() => {
@@ -559,6 +576,19 @@ function ActionCard({
             <Icon className="w-3 h-3" /> {label}
           </span>
           <span className="text-gray-700">{action.campaign_name}</span>
+          {action.action_type === "early_warning" && (
+            <span className="px-1.5 py-0.5 rounded text-xs bg-amber-100 text-amber-700 font-medium">참고용</span>
+          )}
+          {earlySignalData && (
+            <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+              earlySignalData.grade === "Promising" ? "bg-green-100 text-green-700" :
+              earlySignalData.grade === "Watch" ? "bg-yellow-100 text-yellow-700" :
+              earlySignalData.grade === "At Risk" ? "bg-red-100 text-red-700" :
+              "bg-red-200 text-red-800"
+            }`}>
+              {earlySignalData.emoji} Score {earlySignalData.score}
+            </span>
+          )}
           {/* 개선 결과 배지 (compact) */}
           {action.status === "executed" && improvement && (
             <ImprovementBadge result={improvement} />
@@ -586,6 +616,21 @@ function ActionCard({
               {isManualRequired && (
                 <span className="px-1.5 py-0.5 rounded text-xs bg-orange-100 text-orange-700 font-medium">
                   수동 조치 필요
+                </span>
+              )}
+              {action.action_type === "early_warning" && (
+                <span className="px-1.5 py-0.5 rounded text-xs bg-amber-100 text-amber-700 font-medium">
+                  참고용
+                </span>
+              )}
+              {earlySignalData && (
+                <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                  earlySignalData.grade === "Promising" ? "bg-green-100 text-green-700" :
+                  earlySignalData.grade === "Watch" ? "bg-yellow-100 text-yellow-700" :
+                  earlySignalData.grade === "At Risk" ? "bg-red-100 text-red-700" :
+                  "bg-red-200 text-red-800"
+                }`}>
+                  {earlySignalData.emoji} Day {earlySignalData.dayCount} | Score {earlySignalData.score}
                 </span>
               )}
               {/* 개선 결과 배지 */}
@@ -640,6 +685,11 @@ function ActionCard({
               </button>
             )}
 
+            {/* Early Signal 바 차트 */}
+            {earlySignalData && (
+              <EarlySignalBadge data={earlySignalData} />
+            )}
+
             {/* 진단 상세 패널 */}
             {showDiagnosis && hasDiagnosis && (
               <DiagnosisPanel action={action} formatCurrency={formatCurrency} />
@@ -649,14 +699,17 @@ function ActionCard({
 
         {/* 액션 버튼 */}
         <div className="flex items-center gap-2 ml-4 flex-shrink-0">
-          {action.status === "pending" && onApprove && onReject && (
+          {action.status === "pending" && action.action_type === "early_warning" && (
+            <span className="px-2 py-1 rounded text-xs font-medium bg-amber-50 text-amber-600">참고 전용</span>
+          )}
+          {action.status === "pending" && action.action_type !== "early_warning" && onApprove && onReject && (
             <>
               <button
                 onClick={() => onApprove(action.id)}
                 disabled={loading}
                 className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 disabled:opacity-50"
               >
-                <CheckCircle2 className="w-4 h-4" /> 승인
+                <Play className="w-4 h-4" /> 승인 & 실행
               </button>
               <button
                 onClick={() => onReject(action.id)}
@@ -840,6 +893,59 @@ function ImprovementBadge({ result }: { result: ImprovementResult }) {
     <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs bg-gray-100 text-gray-600">
       — 변화 없음
     </span>
+  );
+}
+
+/** Early Signal 바 차트 — 시그널별 점수 시각화 */
+function EarlySignalBadge({ data }: { data: EarlySignalData }) {
+  const gradeColors: Record<string, string> = {
+    Promising: "text-green-700 bg-green-50 border-green-200",
+    Watch: "text-yellow-700 bg-yellow-50 border-yellow-200",
+    "At Risk": "text-red-700 bg-red-50 border-red-200",
+    Kill: "text-red-800 bg-red-100 border-red-300",
+  };
+
+  const barColor = (score: number | null) => {
+    if (score === null) return "bg-gray-200";
+    if (score >= 70) return "bg-green-500";
+    if (score >= 40) return "bg-yellow-500";
+    return "bg-red-500";
+  };
+
+  return (
+    <div className={`mt-3 p-3 rounded-lg border text-xs ${gradeColors[data.grade] || "bg-gray-50 border-gray-200"}`}>
+      <div className="flex items-center justify-between mb-2">
+        <span className="font-semibold">
+          {data.emoji} Early Health Score: {data.score}
+        </span>
+        <span className="font-medium">{data.grade}</span>
+      </div>
+      <div className="space-y-1.5">
+        {(data.signals || []).map((s) => (
+          <div key={s.key} className="flex items-center gap-2">
+            <span className="w-24 text-gray-600 truncate">{s.name}</span>
+            <div className="flex-1 bg-gray-200 rounded-full h-2 overflow-hidden">
+              {s.score !== null && (
+                <div
+                  className={`h-full rounded-full transition-all ${barColor(s.score)}`}
+                  style={{ width: `${Math.min(100, Math.max(0, s.score))}%` }}
+                />
+              )}
+            </div>
+            <span className="w-8 text-right font-medium text-gray-700">
+              {s.score !== null ? s.score : "—"}
+            </span>
+          </div>
+        ))}
+      </div>
+      {data.recommendations?.length > 0 && (
+        <div className="mt-2 pt-2 border-t border-current/10 space-y-0.5">
+          {data.recommendations.slice(0, 3).map((rec, i) => (
+            <p key={i} className="text-gray-600">💡 {rec}</p>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

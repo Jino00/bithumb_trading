@@ -281,54 +281,66 @@ function computeTimeseriesTrend(values) {
  */
 function recomputeActionEffectiveness(db) {
   const measured = db.prepare(`
-    SELECT action_type, action_description, result_verdict,
-           before_roas, after_roas, before_ctr, after_ctr
+    SELECT id, action_type, action_description, result_verdict,
+           before_roas, after_roas, before_ctr, after_ctr,
+           root_cause, funnel_stage, strategy_applied
     FROM improvement_log
     WHERE result_verdict IS NOT NULL
   `).all();
 
   if (measured.length === 0) return 0;
 
-  // 조치 유형별 집계
+  // 조치 유형별 집계 (root_cause 추가로 3차원 세분화)
   const stats = {};
   for (const row of measured) {
     const key = row.action_type;
     const stage = inferDiagnosisStage(row.action_type);
-    const compositeKey = `${key}|${stage}`;
+    const rootCause = row.root_cause || "unknown";
 
+    // 기존 2차원 집계 (하위 호환)
+    const compositeKey = `${key}|${stage}`;
+    // 새 3차원 집계 (root_cause별 세분화)
+    const detailedKey = `${key}|${stage}|${rootCause}`;
+
+    // 기존 집계 유지
     if (!stats[compositeKey]) {
       stats[compositeKey] = {
-        action_type: key,
-        stage,
+        action_type: key, stage, rootCause: null,
         total: 0, improved: 0, unchanged: 0, worsened: 0,
-        roasChanges: [], ctrChanges: [],
+        roasChanges: [], ctrChanges: [], logIds: [],
       };
     }
+    accumulateStats(stats[compositeKey], row);
 
-    const s = stats[compositeKey];
-    s.total++;
-    if (row.result_verdict === "improved") s.improved++;
-    else if (row.result_verdict === "unchanged") s.unchanged++;
-    else if (row.result_verdict === "worsened") s.worsened++;
-
-    if (row.before_roas && row.after_roas) {
-      s.roasChanges.push(row.after_roas - row.before_roas);
-    }
-    if (row.before_ctr && row.after_ctr) {
-      s.ctrChanges.push(row.after_ctr - row.before_ctr);
+    // root_cause 세분화 집계 (root_cause가 있을 때만)
+    if (rootCause !== "unknown") {
+      if (!stats[detailedKey]) {
+        stats[detailedKey] = {
+          action_type: key, stage, rootCause,
+          total: 0, improved: 0, unchanged: 0, worsened: 0,
+          roasChanges: [], ctrChanges: [], logIds: [],
+        };
+      }
+      accumulateStats(stats[detailedKey], row);
     }
   }
+
+  // 시계열 데이터로 효과 발현 속도 + 안정성 보강
+  enrichWithTimeSeries(db, stats);
 
   const upsert = db.prepare(`
     INSERT INTO action_effectiveness
       (action_type, diagnosis_stage, times_applied, times_improved, times_unchanged,
-       times_worsened, avg_roas_change, avg_ctr_change, success_rate, last_updated)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+       times_worsened, avg_roas_change, avg_ctr_change, success_rate, root_cause, strategy,
+       avg_days_to_effect, avg_stability_score, last_updated)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     ON CONFLICT(action_type, diagnosis_stage) DO UPDATE SET
       times_applied=excluded.times_applied, times_improved=excluded.times_improved,
       times_unchanged=excluded.times_unchanged, times_worsened=excluded.times_worsened,
       avg_roas_change=excluded.avg_roas_change, avg_ctr_change=excluded.avg_ctr_change,
-      success_rate=excluded.success_rate, last_updated=excluded.last_updated
+      success_rate=excluded.success_rate, root_cause=excluded.root_cause,
+      strategy=excluded.strategy, avg_days_to_effect=excluded.avg_days_to_effect,
+      avg_stability_score=excluded.avg_stability_score, last_updated=excluded.last_updated
   `);
 
   let count = 0;
@@ -342,7 +354,8 @@ function recomputeActionEffectiveness(db) {
 
       upsert.run(
         s.action_type, s.stage, s.total, s.improved, s.unchanged,
-        s.worsened, roundN(avgRoasChange), roundN(avgCtrChange), roundN(successRate)
+        s.worsened, roundN(avgRoasChange), roundN(avgCtrChange), roundN(successRate),
+        s.rootCause, null, roundN(s.avgDaysToEffect || 0), roundN(s.avgStability || 0)
       );
       count++;
     }
@@ -350,6 +363,57 @@ function recomputeActionEffectiveness(db) {
 
   save();
   return count;
+}
+
+function accumulateStats(s, row) {
+  s.total++;
+  if (row.result_verdict === "improved") s.improved++;
+  else if (row.result_verdict === "unchanged") s.unchanged++;
+  else if (row.result_verdict === "worsened") s.worsened++;
+  if (row.before_roas && row.after_roas) s.roasChanges.push(row.after_roas - row.before_roas);
+  if (row.before_ctr && row.after_ctr) s.ctrChanges.push(row.after_ctr - row.before_ctr);
+  if (row.id) s.logIds.push(row.id);
+}
+
+/**
+ * improvement_daily_metrics 시계열 데이터로 효과 발현 속도 + 안정성 계산
+ * - avg_days_to_effect: 효과(+ROAS)가 처음 나타나기까지 평균 일수
+ * - avg_stability: 후반 3일 변화 / 전체 평균 변화 (1.0 = 안정적)
+ */
+function enrichWithTimeSeries(db, stats) {
+  try {
+    for (const [, s] of Object.entries(stats)) {
+      if (!s.logIds || s.logIds.length === 0) continue;
+      let totalDaysToEffect = 0;
+      let totalStability = 0;
+      let validCount = 0;
+
+      for (const logId of s.logIds) {
+        const daily = db.prepare(
+          "SELECT day_number, roas_change FROM improvement_daily_metrics WHERE improvement_log_id = ? ORDER BY day_number"
+        ).all(logId);
+        if (daily.length < 2) continue;
+
+        // 효과 발현 속도: roas_change가 처음으로 양수가 되는 day
+        const firstPositive = daily.find(d => (d.roas_change || 0) > 0);
+        if (firstPositive) totalDaysToEffect += firstPositive.day_number;
+
+        // 안정성: 후반 3일 평균 / 전체 평균 (1.0에 가까울수록 안정)
+        const allChanges = daily.map(d => d.roas_change || 0);
+        const avgAll = allChanges.reduce((a, b) => a + b, 0) / allChanges.length;
+        const lastThree = allChanges.slice(-3);
+        const avgLast = lastThree.reduce((a, b) => a + b, 0) / lastThree.length;
+        const stability = avgAll !== 0 ? Math.min(avgLast / avgAll, 2.0) : 1.0;
+        totalStability += stability;
+        validCount++;
+      }
+
+      s.avgDaysToEffect = validCount > 0 ? totalDaysToEffect / validCount : 0;
+      s.avgStability = validCount > 0 ? totalStability / validCount : 0;
+    }
+  } catch (err) {
+    console.warn("[TrendIntel] enrichWithTimeSeries failed:", err.message);
+  }
 }
 
 /**

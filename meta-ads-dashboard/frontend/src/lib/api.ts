@@ -79,10 +79,17 @@ export interface TrendsData {
 }
 
 // Ads
-export type DatePeriod = "1d" | "7d" | "15d" | "30d";
+export type DatePeriod = "1d" | "7d" | "15d" | "30d" | "custom";
+
+export interface CustomDateRange {
+  since: string; // "YYYY-MM-DD"
+  until: string; // "YYYY-MM-DD"
+}
 export const fetchCampaigns = () => api.get<Campaign[]>("/ads").then((r) => r.data);
 export const fetchCampaignsByPeriod = (period: DatePeriod) =>
   api.get<Campaign[]>(`/meta/insights?period=${period}`).then((r) => r.data);
+export const fetchCampaignsByCustomRange = (since: string, until: string) =>
+  api.get<Campaign[]>(`/meta/insights?since=${since}&until=${until}`).then((r) => r.data);
 export const createCampaign = (data: Partial<Campaign>) => api.post<Campaign>("/ads", data).then((r) => r.data);
 export const updateCampaign = (id: number, data: Partial<Campaign>) =>
   api.put<Campaign>(`/ads/${id}`, data).then((r) => r.data);
@@ -209,6 +216,8 @@ export interface JudgeResult {
 
 export const judgeAllCampaigns = (period: DatePeriod = "30d") =>
   api.post<JudgeResult>(`/analysis/judge-all?period=${period}`).then((r) => r.data);
+export const judgeAllCampaignsByCustomRange = (since: string, until: string) =>
+  api.post<JudgeResult>(`/analysis/judge-all?since=${since}&until=${until}`).then((r) => r.data);
 
 // Phase 4: 성과 트렌드 + 개선 추적
 export interface CampaignSnapshot {
@@ -406,6 +415,8 @@ export interface ProfitabilityData {
 
 export const fetchProfitability = (period: DatePeriod = "30d") =>
   api.get<ProfitabilityData>(`/analysis/profitability?period=${period}`).then((r) => r.data);
+export const fetchProfitabilityByCustomRange = (since: string, until: string) =>
+  api.get<ProfitabilityData>(`/analysis/profitability?since=${since}&until=${until}`).then((r) => r.data);
 
 export const fetchBenchmarks = (period: string = "30d") =>
   api.get<BenchmarkData>(`/analysis/benchmarks?period=${period}`).then((r) => r.data);
@@ -771,6 +782,8 @@ export const fetchBusinessAdAccounts = (businessId: string) =>
 // Period insights with optional account override
 export const fetchCampaignsByAccount = (period: DatePeriod, accountId: string) =>
   api.get<Campaign[]>(`/meta/insights?period=${period}&account_id=${accountId}`).then((r) => r.data);
+export const fetchCampaignsByAccountCustomRange = (since: string, until: string, accountId: string) =>
+  api.get<Campaign[]>(`/meta/insights?since=${since}&until=${until}&account_id=${accountId}`).then((r) => r.data);
 
 // Ad Library Reviews
 export interface AdLibraryTrend {
@@ -1206,7 +1219,7 @@ export interface ActionQueueItem {
   review_run_id: number;
   campaign_name: string;
   meta_campaign_id: string;
-  action_type: "pause" | "budget_increase" | "budget_decrease" | "resume" | "targeting_broaden" | "creative_refresh";
+  action_type: "pause" | "budget_increase" | "budget_decrease" | "resume" | "targeting_broaden" | "creative_refresh" | "early_warning" | "early_kill";
   current_value: string;
   proposed_value: string;
   reason: string;
@@ -1226,6 +1239,31 @@ export interface ActionQueueItem {
   adset_id: string | null;
   improvement_log_id: number | null;
   trend_direction: "improving" | "declining" | "flat" | null;
+  early_signal_json: string | null;
+}
+
+export interface EarlySignalItem {
+  name: string;
+  key: string;
+  value: number | null;
+  score: number | null;
+  weight: number;
+  benchmark: { fail: number; success: number };
+  skipped: boolean;
+}
+
+export interface EarlySignalData {
+  score: number;
+  grade: "Promising" | "Watch" | "At Risk" | "Kill";
+  color: string;
+  emoji: string;
+  signals: EarlySignalItem[];
+  recommendations: string[];
+  isEarlyKill: boolean;
+  reason: string;
+  dayCount: number;
+  spend: number;
+  purchases: number;
 }
 
 export interface FunnelDiagnosis {
@@ -1408,3 +1446,127 @@ export interface CampaignRecommendations {
 
 export const fetchCampaignRecommendations = () =>
   api.get<CampaignRecommendations>("/campaign-publish/recommendations").then((r) => r.data);
+
+// ─── 포스트모템 분석 ───
+
+export interface PostMortemDailyMetric {
+  date: string;
+  value: number;
+}
+
+export interface FactorDetail {
+  current: number;
+  avg: number;
+  min: number;
+  max: number;
+  trend: "up" | "down" | "flat";
+  daily_values: PostMortemDailyMetric[];
+  verdict: "good" | "moderate" | "warning" | "critical" | "unknown";
+}
+
+export interface FunnelStage {
+  name: string;
+  count: number;
+  conversion_rate?: number;
+  drop_off_rate?: number;
+}
+
+export interface CampaignPostMortem {
+  campaign: {
+    name: string;
+    meta_campaign_id: string;
+    root_cause: string;
+    pause_reason: string;
+    pause_date: string;
+    score: number;
+    verdict: string;
+  };
+  daily_metrics: Array<{
+    date: string;
+    spend: number;
+    impressions: number;
+    clicks: number;
+    ctr: number;
+    cpc: number;
+    frequency: number;
+    roas: number;
+    revenue: number;
+    purchases: number;
+  }>;
+  factor_analysis: {
+    roas: FactorDetail;
+    ctr: FactorDetail;
+    cpc: FactorDetail;
+    frequency: FactorDetail;
+    spend?: { total: number; daily_values: PostMortemDailyMetric[] };
+    revenue?: { total: number; daily_values: PostMortemDailyMetric[] };
+    purchases?: { total: number; daily_values: PostMortemDailyMetric[] };
+  };
+  funnel_analysis: {
+    stages: FunnelStage[];
+    bottleneck: string | null;
+    totals: Record<string, number>;
+  } | null;
+  diagnosis: {
+    root_cause?: string;
+    funnel_diagnosis?: unknown;
+    benchmark_comparison?: unknown;
+    profitability?: unknown;
+    recommendations?: unknown;
+  };
+  assessment: {
+    strengths: string[];
+    weaknesses: string[];
+    missed_signals: string[];
+  };
+  improvement_history: Array<{
+    action_type: string;
+    action_description: string;
+    before_roas: number | null;
+    after_roas: number | null;
+    result_verdict: string | null;
+    created_at: string;
+  }>;
+  recovery_plan: {
+    status: string;
+    cooling_days: number;
+    resume_date: string | null;
+    attempt_count: number;
+    max_attempts: number;
+    strategies: string[];
+  };
+}
+
+export interface PostMortemSummary {
+  campaign_count: number;
+  root_cause_distribution: Record<string, number>;
+  total_spend_7d: number;
+  total_revenue_7d: number;
+  overall_roas_7d: number;
+  avg_metrics: Record<string, number>;
+  common_weaknesses: Array<{ weakness: string; campaign_count: number }>;
+  bottleneck_distribution: Record<string, number>;
+}
+
+export interface PostMortemLesson {
+  id: number;
+  root_cause: string;
+  lesson_type: string;
+  description: string;
+  evidence_json: string;
+  campaign_count: number;
+  confidence: string;
+  created_at: string;
+}
+
+export interface PostMortemReport {
+  postMortems: CampaignPostMortem[];
+  summary: PostMortemSummary | null;
+  lessons: PostMortemLesson[];
+}
+
+export const generatePostMortemReport = () =>
+  api.post<PostMortemReport>("/analysis/postmortem").then((r) => r.data);
+
+export const fetchPostMortemLessons = () =>
+  api.get<{ lessons: PostMortemLesson[] }>("/analysis/postmortem-lessons").then((r) => r.data);

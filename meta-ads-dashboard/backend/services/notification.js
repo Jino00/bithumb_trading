@@ -16,6 +16,8 @@ const ACTION_TYPE_LABELS = {
   resume: "▶️ 재개",
   targeting_broaden: "🎯 Broad 타겟 전환",
   creative_refresh: "🎨 소재 교체 필요",
+  early_warning: "🔮 조기 경고",
+  early_kill: "💀 조기 중단 권장",
 };
 
 /**
@@ -79,7 +81,7 @@ export async function sendTestNotification() {
   return { success: true };
 }
 
-function formatReviewMessage({ date, total_campaigns, actions, summary }) {
+function formatReviewMessage({ date, total_campaigns, actions, summary, early_signals }) {
   const lines = [];
   lines.push(`📊 일일 광고 리뷰 — ${date}`);
   lines.push("");
@@ -103,6 +105,19 @@ function formatReviewMessage({ date, total_campaigns, actions, summary }) {
     const hasTrend = improving + declining + flat > 0;
     if (hasTrend) {
       lines.push(`📊 추세: 📈개선 ${improving} / 📉하락 ${declining} / ➡️안정 ${flat}`);
+    }
+  }
+
+  // 조기 진단 섹션 (1-3일차 신규 캠페인)
+  if (early_signals && early_signals.length > 0) {
+    lines.push("");
+    lines.push(`🔮 신규 캠페인 조기 진단: ${early_signals.length}건`);
+    for (const es of early_signals) {
+      const name = es.campaign?.campaign_name || es.campaign?.meta_campaign_id || "Unknown";
+      lines.push(`  ${es.emoji} ${name} — Day ${es.dayCount} | Score ${es.score} (${es.grade})`);
+      if (es.recommendations && es.recommendations.length > 0) {
+        lines.push(`    💡 ${es.recommendations[0]}`);
+      }
     }
   }
 
