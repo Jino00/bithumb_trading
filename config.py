@@ -210,3 +210,15 @@ PAPER_REPORT_INTERVAL_MIN = 60                 # 상태 보고 주기 (분)
 PAPER_OHLCV_COUNT = 500                        # 실시간 캔들 수
 PAPER_STARTUP_OHLCV_COUNT = 5000               # 시작 시 전체 평가용 캔들 수
 PAPER_REEVAL_COOLDOWN_MIN = 15                 # 재평가 후 쿨다운 (분)
+
+# ── 전략 진화 엔진 설정 ─────────────────────────────────────
+EVOLUTION_CYCLE_MINUTES = 30                   # 최적화 라운드 주기 (분)
+EVOLUTION_MIN_IMPROVEMENT_PCT = 5.0            # 최소 개선폭 % (이하면 무시)
+EVOLUTION_WALK_FORWARD_RATIO = 0.7             # 학습/검증 시계열 분할 비율
+EVOLUTION_MAX_CANDIDATES = 12                  # 라운드당 후보 수
+EVOLUTION_MIN_TRADES = 8                       # 후보 최소 거래 수
+EVOLUTION_MAX_MDD_PCT = 15.0                   # 후보 최대 허용 MDD %
+EVOLUTION_MIN_PF = 1.2                         # 후보 최소 Profit Factor
+EVOLUTION_OOS_RATIO = 0.6                      # OOS 점수 ≥ IS 점수 × 이 비율
+EVOLUTION_DRIFT_THRESHOLD = 0.3                # 실전 vs 백테스트 괴리 임계값
+EVOLUTION_FEEDBACK_LOOKBACK_H = 168            # 피드백 분석 lookback (시간, 1주)

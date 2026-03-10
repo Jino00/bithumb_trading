@@ -1,4 +1,7 @@
 """6전략을 백테스트 기반으로 평가하고 최적 전략을 선택한다."""
+import json
+import logging
+import sqlite3
 import sys
 from dataclasses import dataclass, field
 from typing import Optional
@@ -7,6 +10,8 @@ import numpy as np
 import pandas as pd
 
 import config
+
+_evaluator_logger = logging.getLogger(__name__)
 from backtest_scalp import (
     Trade,
     analyze,
@@ -78,7 +83,7 @@ _RUNNERS = {
 }
 
 
-def _get_default_params(strategy_id: str) -> dict:
+def _get_config_defaults(strategy_id: str) -> dict:
     """config.py에서 전략별 기본 파라미터를 읽어 dict로 반환한다."""
     if strategy_id == "S1":
         return {
@@ -136,6 +141,40 @@ def _get_default_params(strategy_id: str) -> dict:
             "retest_tol": config.SCALP_SMMA_RETEST_TOL,
         }
     return {}
+
+
+def _load_evolved_params(strategy_id: str) -> Optional[dict]:
+    """evolved_params 테이블에서 진화된 파라미터를 읽는다. 없으면 None."""
+    try:
+        conn = sqlite3.connect(config.DB_PATH)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """SELECT params_json FROM evolved_params
+               WHERE strategy_id=? AND coin='' AND regime=''
+               AND active=1 AND validated=1
+               ORDER BY id DESC LIMIT 1""",
+            (strategy_id,),
+        ).fetchone()
+        conn.close()
+        if row:
+            return json.loads(row["params_json"])
+    except Exception:
+        # 테이블 없거나 DB 에러 → 조용히 무시 (config.py 폴백)
+        pass
+    return None
+
+
+def _get_default_params(strategy_id: str) -> dict:
+    """전략 파라미터를 반환한다. 진화 엔진 결과 우선, config.py 폴백."""
+    base = _get_config_defaults(strategy_id)
+    evolved = _load_evolved_params(strategy_id)
+    if evolved:
+        base.update(evolved)
+        _evaluator_logger.debug(
+            f"[Evaluator] {strategy_id} 진화 파라미터 적용: "
+            f"{list(evolved.keys())}"
+        )
+    return base
 
 
 class StrategyEvaluator:

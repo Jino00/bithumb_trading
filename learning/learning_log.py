@@ -5,6 +5,9 @@
   adaptive_state           — 코인별 적응 상태 영속화 (재시작 시 복원)
   adaptation_effectiveness — 적응 전후 성과 비교 (BEFORE/AFTER 스냅샷)
   adaptation_memory        — 장기 기억 (뭐가 효과적이었나)
+  evolved_params           — 진화 엔진이 발견한 최적 파라미터 (active=1이 현재 사용 중)
+  evolution_history        — 진화 시도 전체 이력 (감사 추적)
+  evolution_state          — 진화 엔진 상태 영속화
 """
 import json
 import logging
@@ -62,6 +65,45 @@ CREATE TABLE IF NOT EXISTS adaptation_memory (
     last_applied_at     TEXT,
     created_at          TEXT DEFAULT (datetime('now','localtime')),
     UNIQUE(coin, adaptation_type, parameter_key)
+);
+
+-- ── 전략 진화 엔진 테이블 ──────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS evolved_params (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    strategy_id     TEXT    NOT NULL,
+    coin            TEXT,
+    regime          TEXT,
+    params_json     TEXT    NOT NULL,
+    robust_score    REAL    NOT NULL,
+    baseline_score  REAL    NOT NULL,
+    improvement_pct REAL    NOT NULL,
+    validated       INTEGER NOT NULL DEFAULT 0,
+    active          INTEGER NOT NULL DEFAULT 1,
+    created_at      TEXT DEFAULT (datetime('now','localtime')),
+    UNIQUE(strategy_id, coin, regime)
+);
+
+CREATE TABLE IF NOT EXISTS evolution_history (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    strategy_id     TEXT    NOT NULL,
+    coin            TEXT,
+    regime          TEXT,
+    candidate_json  TEXT    NOT NULL,
+    baseline_json   TEXT    NOT NULL,
+    candidate_score REAL,
+    baseline_score  REAL,
+    improvement_pct REAL,
+    validated       INTEGER NOT NULL DEFAULT 0,
+    applied         INTEGER NOT NULL DEFAULT 0,
+    fail_reason     TEXT,
+    created_at      TEXT DEFAULT (datetime('now','localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS evolution_state (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    state_json TEXT    NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now','localtime'))
 );
 """
 
