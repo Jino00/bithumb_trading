@@ -246,7 +246,7 @@ class EvolutionDB:
     # ── evolution_state (엔진 상태 영속화) ─────────────────
 
     def save_state(self, state_dict: dict) -> None:
-        """진화 엔진 상태를 저장한다."""
+        """진화 엔진 상태를 저장한다 (최근 100건만 유지)."""
         try:
             state_json = json.dumps(state_dict, ensure_ascii=False, default=str)
             with self._conn() as conn:
@@ -254,6 +254,13 @@ class EvolutionDB:
                     """INSERT INTO evolution_state (state_json)
                        VALUES (?)""",
                     (state_json,),
+                )
+                conn.execute(
+                    """DELETE FROM evolution_state
+                       WHERE id NOT IN (
+                           SELECT id FROM evolution_state
+                           ORDER BY id DESC LIMIT 100
+                       )"""
                 )
         except Exception as e:
             logger.error(f"[EvoDB] 상태 저장 실패: {e}")

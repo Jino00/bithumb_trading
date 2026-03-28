@@ -1,7 +1,7 @@
-"""레짐별 최적 전략을 자동 전환하는 LONG-only 메타 전략.
+"""레짐별 7전략 폭포식 선택 LONG-only 메타 전략.
 
-S2 거래량돌파(BULL) + S3 하이킨아시(SIDEWAYS) + S5 과매도반등(BEAR) + S6 SMMA리테스트.
-backtest_scalp.py 학습 루프를 통해 검증 완료.
+S1 RSI(BEAR) + S2 Volume(BULL) + S3 HA(SIDEWAYS) + S4 VWAP + S5 Bear + S6 SMMA + S7 SMC.
+2026-03-15: 전 전략 활성화, 폭포식 탐색으로 거래 빈도 극대화.
 """
 import logging
 from dataclasses import dataclass
@@ -86,32 +86,91 @@ class ScalpStrategy(BaseStrategy):
         ctx = self.generate_signal_with_context(df)
         return ctx.signal
 
-    def generate_signal_with_context(self, df: pd.DataFrame) -> ScalpSignalContext:
-        """레짐 감지 → 최적 전략 자동 선택 → 신호 생성."""
+    def generate_signal_with_context(
+        self, df: pd.DataFrame, strategy_scores: dict = None
+    ) -> ScalpSignalContext:
+        """레짐 감지 → 전략 폭포식 탐색 → 첫 BUY 신호 반환.
+
+        strategy_scores가 주어지면 인사이트 학습 승률 기반으로
+        워터폴 우선순위를 동적으로 재정렬한다.
+        """
         if df is None or len(df) < 60:
             return ScalpSignalContext("HOLD", "데이터 부족", "NONE", "UNKNOWN")
 
-        # 레짐 감지 (detect()는 MarketRegime enum 반환)
+        # ── 도지 캔들 필터 (NotebookLM 인사이트) ──
+        last = df.iloc[-1]
+        body = abs(last["close"] - last["open"])
+        wick = last["high"] - last["low"]
+        if wick > 0 and body / wick < config.SCALP_DOJI_BODY_RATIO:
+            return ScalpSignalContext(
+                "HOLD", "도지 캔들 — 방향성 불확실", "NONE", "UNKNOWN"
+            )
+
         regime = self.regime_detector.detect(df)
 
         if regime == MarketRegime.TRENDING_DOWN:
-            return self._signal_s5_bear_bounce(df)
+            return self._waterfall_bear(df, strategy_scores)
 
         regime_str = "BULL" if regime == MarketRegime.TRENDING_UP else "SIDEWAYS"
 
-        # 레짐별 전략 선택 + S6 보조 신호
+        # ── 200 EMA 추세 필터 (완화: SIDEWAYS에서는 적용 안 함) ──
+        # 이전: EMA200 아래면 무조건 차단 → 거래 기회 과도 감소
+        # 변경: BULL에서만 적용 (SIDEWAYS는 레인지 바운스 가능)
         if regime == MarketRegime.TRENDING_UP:
-            ctx = self._signal_s2_volume(df, regime_str)
+            ema200 = df["close"].ewm(
+                span=config.SCALP_EMA_TREND_FILTER, adjust=False
+            ).mean()
+            if df["close"].iloc[-1] < ema200.iloc[-1]:
+                return ScalpSignalContext(
+                    "HOLD", "200 EMA 아래 — 추세 필터 차단",
+                    "NONE", regime_str,
+                )
+
+        if regime == MarketRegime.TRENDING_UP:
+            candidates = self._bull_candidates(df, regime_str)
         else:
-            ctx = self._signal_s3_heikin_ashi(df, regime_str)
+            candidates = self._sideways_candidates(df, regime_str)
 
-        # 주 전략이 HOLD이면 S6 SMMA 리테스트 시도
-        if ctx.signal == "HOLD":
-            s6_ctx = self._signal_s6_smma_retest(df, regime_str)
-            if s6_ctx.signal == "BUY":
-                return s6_ctx
+        return self._run_waterfall(candidates, strategy_scores, regime_str)
 
-        return ctx
+    def _bull_candidates(self, df, regime_str) -> list:
+        """BULL 레짐 전략 후보 리스트 (S6 제거: 18% 승률)."""
+        return [
+            ("S2_Volume", lambda: self._signal_s2_volume(df, regime_str)),
+            ("S3_HA", lambda: self._signal_s3_heikin_ashi(df, regime_str)),
+            ("S1_RSI", lambda: self._signal_s1_rsi_pullback(df, regime_str)),
+        ]
+
+    def _sideways_candidates(self, df, regime_str) -> list:
+        """SIDEWAYS 레짐 전략 후보 리스트 (S6 제외: 승률 14%)."""
+        return [
+            ("S3_HA", lambda: self._signal_s3_heikin_ashi(df, regime_str)),
+            ("S2_Volume", lambda: self._signal_s2_volume(df, regime_str)),
+            ("S1_RSI", lambda: self._signal_s1_rsi_pullback(df, regime_str)),
+        ]
+
+    def _waterfall_bear(self, df, strategy_scores) -> ScalpSignalContext:
+        """BEAR 레짐 워터폴: S5 → S1."""
+        candidates = [
+            ("S5_Bear", lambda: self._signal_s5_bear_bounce(df)),
+            ("S1_RSI", lambda: self._signal_s1_rsi_pullback(df, "BEAR")),
+        ]
+        return self._run_waterfall(candidates, strategy_scores, "BEAR")
+
+    def _run_waterfall(self, candidates, strategy_scores, regime_str):
+        """인사이트 점수로 재정렬 후 첫 BUY 신호를 반환."""
+        if strategy_scores:
+            candidates.sort(
+                key=lambda x: strategy_scores.get(x[0], 50),
+                reverse=True,
+            )
+        for _, signal_fn in candidates:
+            ctx = signal_fn()
+            if ctx.signal == "BUY":
+                return ctx
+        return ScalpSignalContext(
+            "HOLD", f"{regime_str} 전략 신호 없음", "NONE", regime_str
+        )
 
     def _signal_s3_heikin_ashi(self, df: pd.DataFrame, regime: str) -> ScalpSignalContext:
         """S3: 하이킨아시 도지 → 평평한 양봉 반전 패턴."""
@@ -384,3 +443,168 @@ class ScalpStrategy(BaseStrategy):
             f"SL {sl_pct:.1f}%, TP {tp_pct:.1f}%"
         )
         return ScalpSignalContext("BUY", reason, "S6_SMMA", regime, sl_pct, tp_pct)
+
+    def _signal_s7_smc(self, df: pd.DataFrame, regime: str) -> ScalpSignalContext:
+        """S7: Smart Money Concepts — Order Block + FVG + Liquidity Sweep 실시간 신호."""
+        from strategy.smc_strategy import (
+            detect_swing_points, detect_order_blocks,
+            detect_fvg, detect_liquidity_sweep, detect_bos,
+        )
+
+        c = df["close"].astype(float)
+        o = df["open"].astype(float)
+        h = df["high"].astype(float)
+        lo = df["low"].astype(float)
+        n = len(df)
+
+        if n < 60:
+            return ScalpSignalContext("HOLD", "데이터 부족", "S7_SMC", regime)
+
+        # ATR 기반 변동성 필터 (df에 없으면 자체 계산)
+        atr_col = df.get("atr")
+        if atr_col is None or len(atr_col) == 0:
+            atr_col = ta.volatility.AverageTrueRange(
+                h, lo, c, window=14
+            ).average_true_range()
+
+        i = n - 1
+        atr_val = float(atr_col.iloc[i])
+        price = float(c.iloc[i])
+        if price <= 0 or atr_val <= 0:
+            return ScalpSignalContext("HOLD", "가격/ATR 이상", "S7_SMC", regime)
+
+        atr_pct = atr_val / price * 100
+        if atr_pct < config.SMC_MIN_ATR_PCT:
+            return ScalpSignalContext("HOLD", f"변동성 부족 ({atr_pct:.2f}%)", "S7_SMC", regime)
+
+        # 양봉 확인
+        if float(c.iloc[i]) <= float(o.iloc[i]):
+            return ScalpSignalContext("HOLD", "양봉 아님", "S7_SMC", regime)
+
+        # SMC 구조 감지
+        swing_highs, swing_lows = detect_swing_points(
+            h.values, lo.values, lookback=5
+        )
+        order_blocks = detect_order_blocks(
+            df, lookback=config.SMC_OB_LOOKBACK,
+            min_move_pct=config.SMC_OB_MIN_MOVE_PCT,
+        )
+        fvgs = detect_fvg(df, min_gap_pct=config.SMC_FVG_MIN_GAP_PCT)
+        sweep_signal = detect_liquidity_sweep(
+            df, swing_lows, sweep_pct=config.SMC_LIQUIDITY_SWEEP_PCT,
+        )
+        bos_signal = detect_bos(df, swing_highs)
+
+        # BOS 확인 (최근 10봉 이내)
+        recent_bos = any(bos_signal[max(0, i - 10):i + 1])
+        if not recent_bos:
+            return ScalpSignalContext("HOLD", "BOS 미확인", "S7_SMC", regime)
+
+        # 진입 조건 체크 (3가지 중 하나)
+        entry_reason = ""
+
+        # 1. Order Block 리테스트
+        for ob in order_blocks:
+            if not ob.is_valid or ob.idx >= i - 3:
+                continue
+            if float(lo.iloc[i]) <= ob.ob_high and float(c.iloc[i]) >= ob.ob_low:
+                entry_reason = "OB 리테스트"
+                break
+
+        # 2. FVG 메꿈
+        if not entry_reason:
+            for fvg in fvgs:
+                if fvg.filled or fvg.idx >= i - 3:
+                    continue
+                if float(lo.iloc[i]) <= fvg.gap_high and float(c.iloc[i]) >= fvg.gap_low:
+                    entry_reason = "FVG 메꿈"
+                    break
+
+        # 3. Liquidity Sweep
+        if not entry_reason and sweep_signal[i]:
+            entry_reason = "유동성 스윕"
+
+        if not entry_reason:
+            return ScalpSignalContext("HOLD", "SMC 진입 조건 미충족", "S7_SMC", regime)
+
+        # SL/TP 계산 (ATR 기반)
+        sl_pct = atr_val * config.SMC_ATR_SL_MULT / price * 100
+        tp_pct = sl_pct * config.SMC_RR_RATIO
+
+        reason = (
+            f"S7 SMC: {entry_reason} + BOS 확인, "
+            f"SL {sl_pct:.1f}%, TP {tp_pct:.1f}%"
+        )
+        return ScalpSignalContext("BUY", reason, "S7_SMC", regime, sl_pct, tp_pct)
+
+    def _signal_s1_rsi_pullback(self, df: pd.DataFrame, regime: str) -> ScalpSignalContext:
+        """S1: RSI 과매도 풀백 — BEAR 보조전략."""
+        c = df["close"].astype(float)
+        o = df["open"].astype(float)
+        n = len(df)
+
+        if n < 60:
+            return ScalpSignalContext("HOLD", "데이터 부족", "S1_RSI", regime)
+
+        # RSI 계산 — S1은 SCALP_RSI_PERIOD 사용 (S5의 BEAR_RSI_PERIOD와 다름)
+        rsi = ta.momentum.RSIIndicator(c, window=config.SCALP_RSI_PERIOD).rsi()
+        if rsi is None or len(rsi) < 2:
+            return ScalpSignalContext("HOLD", "RSI 계산 실패", "S1_RSI", regime)
+
+        i = n - 1
+        current_rsi = float(rsi.iloc[i])
+
+        # EMA 추세 확인
+        ema_short = c.ewm(span=config.SCALP_EMA_SHORT, adjust=False).mean()
+        ema_long = c.ewm(span=config.SCALP_EMA_LONG, adjust=False).mean()
+
+        # RSI 풀백 구간 (과매도 후 반등 시작)
+        in_pullback = (config.SCALP_RSI_PULLBACK_LOW <= current_rsi
+                       <= config.SCALP_RSI_PULLBACK_HIGH)
+
+        # 과매도 바운스: RSI가 과매도 후 반등
+        was_oversold = any(
+            float(rsi.iloc[j]) < config.SCALP_RSI_OVERSOLD
+            for j in range(max(0, i - 5), i)
+        )
+
+        # RSI 하락 추세: 최근 RSI가 내려오고 있으면 풀백으로 간주
+        rsi_declining = float(rsi.iloc[i]) < float(rsi.iloc[max(0, i-3)])
+
+        # BULL/SIDEWAYS: 풀백 구간이면 진입 허용 (과매도 이력 또는 RSI 하락 추세)
+        if regime in ("BULL", "TRENDING_UP", "SIDEWAYS"):
+            if not in_pullback:
+                return ScalpSignalContext("HOLD", f"RSI 풀백 밖 ({current_rsi:.0f})", "S1_RSI", regime)
+            if not (was_oversold or rsi_declining):
+                return ScalpSignalContext("HOLD", f"RSI 하락추세 아님 ({current_rsi:.0f})", "S1_RSI", regime)
+        else:
+            # BEAR: 과매도 이력 필수
+            if not (in_pullback and was_oversold):
+                return ScalpSignalContext("HOLD", f"RSI 조건 미충족 ({current_rsi:.0f})", "S1_RSI", regime)
+
+        # 양봉 확인
+        if float(c.iloc[i]) <= float(o.iloc[i]):
+            return ScalpSignalContext("HOLD", "양봉 아님", "S1_RSI", regime)
+
+        # ATR 기반 SL/TP (df에 없으면 자체 계산)
+        atr_col = df.get("atr")
+        if atr_col is None or len(atr_col) == 0:
+            h = df["high"].astype(float)
+            lo_s = df["low"].astype(float)
+            atr_col = ta.volatility.AverageTrueRange(
+                h, lo_s, c, window=14
+            ).average_true_range()
+
+        atr_val = float(atr_col.iloc[i])
+        price = float(c.iloc[i])
+        if price <= 0 or atr_val <= 0:
+            return ScalpSignalContext("HOLD", "가격 이상", "S1_RSI", regime)
+
+        sl_pct = atr_val * config.SCALP_ATR_SL_MULT / price * 100
+        tp_pct = atr_val * config.SCALP_ATR_TP_MULT / price * 100
+
+        reason = (
+            f"S1 RSI 풀백: RSI {current_rsi:.0f} (과매도 후 반등), "
+            f"SL {sl_pct:.1f}%, TP {tp_pct:.1f}%"
+        )
+        return ScalpSignalContext("BUY", reason, "S1_RSI", regime, sl_pct, tp_pct)

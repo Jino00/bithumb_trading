@@ -10,7 +10,6 @@
   engine.run_forever()  # 또는 engine.run_once()
 """
 import logging
-import sys
 import time
 from datetime import datetime
 from typing import Optional

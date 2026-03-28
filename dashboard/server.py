@@ -44,7 +44,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://localhost:58117"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -55,16 +55,24 @@ app.add_middleware(
 from dashboard.routers.analytics import router as analytics_router  # noqa: E402
 from dashboard.routers.paper import router as paper_router  # noqa: E402
 from dashboard.routers.portfolio import router as portfolio_router  # noqa: E402
+from dashboard.routers.screening import router as screening_router  # noqa: E402
 from dashboard.routers.system import router as system_router  # noqa: E402
 from dashboard.routers.trades import router as trades_router  # noqa: E402
 from dashboard.routers.ws import router as ws_router  # noqa: E402
+from dashboard.routers.journal import router as journal_router  # noqa: E402
+from dashboard.routers.insights import router as insights_router  # noqa: E402
+from dashboard.routers.binance import router as binance_router  # noqa: E402
 
 app.include_router(portfolio_router, prefix="/api/portfolio", tags=["portfolio"])
 app.include_router(trades_router, prefix="/api/trades", tags=["trades"])
 app.include_router(analytics_router, prefix="/api/analytics", tags=["analytics"])
 app.include_router(system_router, prefix="/api/system", tags=["system"])
 app.include_router(paper_router, prefix="/api/paper", tags=["paper"])
+app.include_router(screening_router, prefix="/api/screening", tags=["screening"])
 app.include_router(ws_router, prefix="/ws", tags=["websocket"])
+app.include_router(journal_router)
+app.include_router(binance_router)
+app.include_router(insights_router)
 
 
 # ── 정적 파일 서빙 (프로덕션, SPA catch-all) ──────────────────────
@@ -81,8 +89,8 @@ if FRONTEND_DIST.exists():
     @app.get("/{full_path:path}")
     async def spa_catch_all(request: Request, full_path: str):
         """React Router 클라이언트 사이드 라우팅 지원."""
-        file_path = FRONTEND_DIST / full_path
-        if file_path.is_file():
+        file_path = (FRONTEND_DIST / full_path).resolve()
+        if file_path.is_relative_to(FRONTEND_DIST.resolve()) and file_path.is_file():
             return FileResponse(file_path)
         return FileResponse(FRONTEND_DIST / "index.html")
 
@@ -94,7 +102,7 @@ def run_dashboard(port: int = 8080) -> None:
     import uvicorn
     uvicorn.run(
         "dashboard.server:app",
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=port,
         log_level="info",
     )

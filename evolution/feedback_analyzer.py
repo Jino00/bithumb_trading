@@ -42,14 +42,15 @@ class FeedbackAnalyzer:
 
         gross_profit = sum(t["pnl_pct"] for t in wins)
         gross_loss = abs(sum(t["pnl_pct"] for t in losses))
-        pf = gross_profit / gross_loss if gross_loss > 0 else 999.0
+        pf_raw = gross_profit / gross_loss if gross_loss > 0 else 5.0
+        pf = min(pf_raw, 5.0)
 
         total_return = sum(t["pnl_pct"] for t in trades)
         avg_pnl = total_return / len(trades)
 
         return {
             "win_rate": win_rate,
-            "pf": min(pf, 5.0),
+            "pf": pf,
             "avg_pnl": avg_pnl,
             "count": len(trades),
             "total_return": total_return,
