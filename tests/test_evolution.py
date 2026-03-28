@@ -9,6 +9,7 @@ import tempfile
 
 import pytest
 
+import config
 from evolution.param_space import STRATEGY_IDS, STRATEGY_PARAM_SPACE
 from evolution.neighbor_generator import generate_neighbors
 from evolution.evolution_db import EvolutionDB
@@ -188,7 +189,7 @@ class TestEvaluatorBridge:
         from monitor.strategy_evaluator import _get_config_defaults
         params = _get_config_defaults("S1")
         assert "rsi_low" in params
-        assert params["rsi_low"] == 25.0
+        assert params["rsi_low"] == config.SCALP_RSI_PULLBACK_LOW
 
     def test_unknown_strategy_empty(self):
         from monitor.strategy_evaluator import _get_config_defaults

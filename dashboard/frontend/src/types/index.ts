@@ -148,7 +148,11 @@ export interface PaperPositionInfo {
   sl_pct: number;
   tp_pct: number;
   strategy: string;
+  strategy_name: string;
   invested_krw: number;
+  unrealized_pnl_pct: number;
+  unrealized_krw: number;
+  current_price: number;
 }
 
 export interface PaperTriggerEvent {
@@ -185,6 +189,8 @@ export interface PaperCoinSlotInfo {
   coin: string;
   allocated_krw: number;
   balance_krw: number;
+  current_price: number;
+  price_change_pct: number;
   active_strategy_id: string;
   active_strategy_name: string;
   regime: string;
@@ -192,10 +198,12 @@ export interface PaperCoinSlotInfo {
   total_trades: number;
   win_rate: number;
   total_return_pct: number;
+  unrealized_krw: number;
   position: PaperPositionInfo | null;
   draining: boolean;
   activated_at: string | null;
   allocation_weight: number;
+  volatility_tier: string;
 }
 
 export interface PaperPortfolioKPI {
@@ -211,6 +219,18 @@ export interface PaperPortfolioKPI {
   blacklist: string[];
 }
 
+export interface InsightActionsInfo {
+  blocked_combos: string[];
+  blocked_hours: number[];
+  strategy_scores: Record<string, number>;
+  tier_scales: Record<string, number>;
+  sl_widen: boolean;
+  consecutive_losses: number;
+  max_consecutive_losses: number;
+  disabled_strategies: string[];
+  active_filters: string[];
+}
+
 export interface PaperOverview {
   updated_at: string | null;
   mode: string;
@@ -222,6 +242,52 @@ export interface PaperOverview {
   triggers: PaperTriggerEvent[];
   trades: PaperTradeRecord[];
   equity_curve: PaperEquityPoint[];
+  insight_actions?: InsightActionsInfo;
+}
+
+// ── 3단계 파이프라인 스크리닝 ──────────────────────────────
+
+export interface ScreeningSlotInfo {
+  coin: string;
+  strategy: string;
+  interval: string;
+  is_fixed: boolean;
+  stay_hours: number;
+  allocation_weight: number;
+  total_return_pct: number;
+  total_trades: number;
+  win_rate: number;
+  draining: boolean;
+  has_position: boolean;
+}
+
+export interface BenchCoinInfo {
+  symbol: string;
+  interval: string;
+  range_pct: number;
+  volume_krw: number;
+  latest_price: number;
+  latest_volume_krw: number;
+  wait_hours: number;
+  is_eligible: boolean;
+  monitoring_count: number;
+}
+
+export interface PipelineSummary {
+  active_count: number;
+  fixed_count: number;
+  dynamic_count: number;
+  bench_count: number;
+  eligible_count: number;
+  blacklist_count: number;
+}
+
+export interface ScreeningOverview {
+  active_slots: ScreeningSlotInfo[];
+  bench_coins: BenchCoinInfo[];
+  blacklist: string[];
+  scan_count: number;
+  pipeline_summary: PipelineSummary;
 }
 
 // ── WebSocket ──────────────────────────────────────────────

@@ -24,6 +24,7 @@ from backtest_scalp import (
     run_s5_bear_bounce,
     run_s6_smma_retest,
 )
+from strategy.smc_strategy import run_s7_smc
 
 
 def robust_score(stats: dict, min_trades: int = 5) -> float:
@@ -80,6 +81,7 @@ _RUNNERS = {
     "S4": ("S4_VWAP", run_s4_vwap),
     "S5": ("S5_BearBounce", run_s5_bear_bounce),
     "S6": ("S6_SMMA_Retest", run_s6_smma_retest),
+    "S7": ("S7_SMC", run_s7_smc),
 }
 
 
@@ -140,6 +142,18 @@ def _get_config_defaults(strategy_id: str) -> dict:
             "tangle_tol": config.SCALP_SMMA_TANGLE_TOL,
             "retest_tol": config.SCALP_SMMA_RETEST_TOL,
         }
+    if strategy_id == "S7":
+        return {
+            "ob_lookback": config.SMC_OB_LOOKBACK,
+            "ob_min_move_pct": config.SMC_OB_MIN_MOVE_PCT,
+            "fvg_min_gap_pct": config.SMC_FVG_MIN_GAP_PCT,
+            "sweep_pct": config.SMC_LIQUIDITY_SWEEP_PCT,
+            "rr_ratio": config.SMC_RR_RATIO,
+            "sl_mult": config.SMC_ATR_SL_MULT,
+            "cooldown": config.SMC_COOLDOWN_BARS,
+            "min_atr_pct": config.SMC_MIN_ATR_PCT,
+            "use_regime": True,
+        }
     return {}
 
 
@@ -178,7 +192,7 @@ def _get_default_params(strategy_id: str) -> dict:
 
 
 class StrategyEvaluator:
-    """6전략을 모두 백테스트하고 robust_score()로 순위를 매긴다."""
+    """7전략(S1-S7)을 모두 백테스트하고 robust_score()로 순위를 매긴다."""
 
     def __init__(
         self,
@@ -212,13 +226,23 @@ class StrategyEvaluator:
         self, df: pd.DataFrame, regimes: np.ndarray, label: str = ""
     ) -> EvaluationResult:
         """내부: 모든 전략 실행 → 점수 → 정렬."""
+        # ★ DISABLED_STRATEGIES 필터 — 비활성화된 전략은 평가 자체를 건너뜀
+        from strategy.strategy_selector import DISABLED_STRATEGIES
+        disabled_ids = set(DISABLED_STRATEGIES.keys())
+
         scores = []
         for sid in _RUNNERS:
+            # _RUNNERS key는 "S1", "S7" 등, DISABLED key는 "S7_SMC" 등
+            name, _ = _RUNNERS[sid]
+            if name in disabled_ids or sid in disabled_ids:
+                continue
             sc = self._run_strategy(sid, df, regimes)
             scores.append(sc)
         scores.sort(key=lambda s: s.score, reverse=True)
         regime_str = str(regimes[-1]) if len(regimes) > 0 else "UNKNOWN"
-        best = scores[0] if scores and scores[0].score > 0 else None
+        # ★ 점수 > -5 이면 선택 (학습을 위해 거래 기회 확보)
+        # 이전: score > 0 → 대부분 HOLD. 학습 데이터 부족의 원인
+        best = scores[0] if scores and scores[0].score > -5 else None
         return EvaluationResult(
             scores=scores,
             best=best,

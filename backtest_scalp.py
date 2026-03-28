@@ -4,9 +4,12 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+import warnings
 import numpy as np
 import pandas as pd
 import pybithumb
+
+warnings.filterwarnings("ignore", category=RuntimeWarning, message="invalid value")
 
 
 # ── 공통 데이터 구조 ────────────────────────────────────────

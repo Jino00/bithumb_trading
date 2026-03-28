@@ -1,4 +1,4 @@
-// 모니터 트리거 이벤트 로그 — 시간, 타입, 심각도 배지, 설명.
+// 모니터 트리거 이벤트 로그 (Light theme).
 import type { PaperTriggerEvent } from '../../types';
 
 interface Props {
@@ -6,34 +6,33 @@ interface Props {
 }
 
 const severityStyles: Record<string, string> = {
-  HIGH: 'bg-loss/15 text-loss',
-  MEDIUM: 'bg-yellow-500/15 text-yellow-400',
-  LOW: 'bg-bg-tertiary text-text-secondary',
+  HIGH: 'bg-red-50 text-red-600',
+  MEDIUM: 'bg-yellow-50 text-yellow-700',
+  LOW: 'bg-gray-100 text-text-secondary',
 };
 
 export default function PaperTriggerLog({ triggers }: Props) {
   if (triggers.length === 0) {
     return (
-      <div className="bg-bg-secondary border border-border rounded-xl p-6 text-center text-text-secondary">
+      <div className="bg-bg-secondary border border-border rounded-xl p-6 text-center text-text-secondary shadow-sm">
         트리거 이력 없음
       </div>
     );
   }
 
-  // 최신순
   const sorted = [...triggers].reverse();
 
   return (
-    <div className="bg-bg-secondary border border-border rounded-xl p-4">
+    <div className="bg-bg-secondary border border-border rounded-xl p-4 shadow-sm">
       <h3 className="text-sm font-semibold mb-3">트리거 이벤트 ({triggers.length}건)</h3>
       <div className="overflow-y-auto max-h-64 space-y-2">
         {sorted.map((t, idx) => (
           <div
             key={idx}
-            className="flex items-start gap-3 p-2 rounded-lg bg-bg-tertiary/30"
+            className="flex items-start gap-3 p-2.5 rounded-lg bg-bg-tertiary/50 border border-border/50"
           >
             <span
-              className={`text-xs px-1.5 py-0.5 rounded font-medium shrink-0 ${
+              className={`text-xs px-1.5 py-0.5 rounded-full font-medium shrink-0 ${
                 severityStyles[t.severity] || severityStyles.LOW
               }`}
             >

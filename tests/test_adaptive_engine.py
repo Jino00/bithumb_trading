@@ -25,7 +25,7 @@ def _make_report(**overrides) -> AnalysisReport:
         avg_profit_pct=2.5,
         avg_loss_pct=-1.5,
         profit_factor=2.0,
-        max_consecutive_losses=3,
+        max_consecutive_losses=1,
         avg_hold_minutes=120.0,
         by_hour={},
         by_strategy={"RSIStrategy": {"total": 20, "win": 12, "win_rate": 60.0}},
@@ -118,7 +118,7 @@ class TestRuleTrendFilter(unittest.TestCase):
 
     def test_downtrend_bad(self):
         report = _make_report(by_trend={
-            "DOWNTREND": {"total": 10, "win_rate": 35.0},
+            "DOWNTREND": {"total": 10, "win_rate": 25.0},
         })
         result = rule_trend_filter(report)
         self.assertIsNotNone(result)

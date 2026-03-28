@@ -1,4 +1,4 @@
-// 활성 포지션 테이블 — 실시간 WebSocket 데이터 (현재가, 미실현 P&L, SL/TP 포함).
+// 활성 포지션 테이블 — 실시간 WebSocket 데이터 (Light theme).
 import { useState, useEffect } from 'react';
 import { useBotStore } from '../../stores/botStore';
 import type { CoinSlotStatus } from '../../types';
@@ -43,14 +43,14 @@ function PnLBar({ pnl, sl, tp }: { pnl: number | null; sl: number | null; tp: nu
 
   return (
     <div className="mt-1.5">
-      <div className="relative h-1.5 bg-bg-tertiary rounded-full overflow-hidden">
+      <div className="relative h-1.5 bg-gray-100 rounded-full overflow-hidden">
         <div
           className="absolute left-0 top-0 h-full rounded-full transition-all duration-500"
           style={{
             width: `${clampedPct}%`,
             background: pnl >= 0
-              ? `linear-gradient(90deg, #243044, #00c087)`
-              : `linear-gradient(90deg, #ff4757, #243044)`,
+              ? `linear-gradient(90deg, #e2e8f0, #16a34a)`
+              : `linear-gradient(90deg, #dc2626, #e2e8f0)`,
           }}
         />
       </div>
@@ -65,40 +65,41 @@ function PnLBar({ pnl, sl, tp }: { pnl: number | null; sl: number | null; tp: nu
 function PositionCard({ p }: { p: CoinSlotStatus }) {
   if (!p.has_position) {
     return (
-      <div className="bg-bg-secondary border border-border rounded-xl p-4">
+      <div className="bg-bg-secondary border border-border rounded-xl p-4 shadow-sm">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
             <span className="font-semibold">{p.coin}</span>
             <span className="text-xs text-text-secondary">{p.strategy}</span>
           </div>
           {p.draining ? (
-            <span className="px-2 py-0.5 rounded bg-loss/20 text-loss text-xs font-medium">DRAIN</span>
+            <span className="px-2 py-0.5 rounded-full bg-red-50 text-red-600 text-xs font-medium">DRAIN</span>
           ) : (
-            <span className="px-2 py-0.5 rounded bg-bg-tertiary text-text-secondary text-xs">IDLE</span>
+            <span className="px-2 py-0.5 rounded-full bg-gray-100 text-text-secondary text-xs">IDLE</span>
           )}
         </div>
         <div className="text-xs text-text-secondary">
-          Win Rate: <span className={p.live_win_rate >= 70 ? 'text-profit' : p.live_win_rate >= 50 ? 'text-text-primary' : 'text-loss'}>{p.live_win_rate.toFixed(1)}%</span>
+          Win Rate: <span className={p.live_win_rate >= 70 ? 'text-profit font-medium' : p.live_win_rate >= 50 ? 'text-text-primary font-medium' : 'text-loss font-medium'}>{p.live_win_rate.toFixed(1)}%</span>
           <span className="mx-2">|</span>
-          DD: <span className={p.risk_dd > 10 ? 'text-loss' : ''}>{p.risk_dd.toFixed(1)}%</span>
+          DD: <span className={p.risk_dd > 10 ? 'text-loss font-medium' : 'font-medium'}>{p.risk_dd.toFixed(1)}%</span>
         </div>
       </div>
     );
   }
 
   const pnlColor = (p.unrealized_pnl ?? 0) >= 0 ? 'text-profit' : 'text-loss';
-  const pnlBg = (p.unrealized_pnl ?? 0) >= 0 ? 'bg-profit/10' : 'bg-loss/10';
+  const borderColor = (p.unrealized_pnl ?? 0) >= 0 ? 'border-green-200' : 'border-red-200';
+  const pnlBg = (p.unrealized_pnl ?? 0) >= 0 ? 'bg-green-50' : 'bg-red-50';
 
   return (
-    <div className={`bg-bg-secondary border rounded-xl p-4 ${(p.unrealized_pnl ?? 0) >= 0 ? 'border-profit/30' : 'border-loss/30'}`}>
+    <div className={`bg-bg-secondary border ${borderColor} rounded-xl p-4 shadow-sm`}>
       {/* Header */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-accent animate-pulse" />
+          <div className="w-2 h-2 rounded-full bg-profit animate-pulse" />
           <span className="font-semibold text-base">{p.coin}</span>
           <span className="text-xs text-text-secondary">{p.strategy}</span>
         </div>
-        <span className="px-2 py-0.5 rounded bg-accent/20 text-accent text-xs font-medium">TRADING</span>
+        <span className="px-2 py-0.5 rounded-full bg-indigo-50 text-accent text-xs font-semibold">TRADING</span>
       </div>
 
       {/* P&L Hero */}
@@ -137,20 +138,20 @@ function PositionCard({ p }: { p: CoinSlotStatus }) {
       <PnLBar pnl={p.unrealized_pnl} sl={p.stop_loss_pct} tp={p.take_profit_pct} />
 
       {/* Details Row */}
-      <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-border/50">
+      <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-border">
         <div>
           <span className="text-[10px] text-text-secondary block">RSI Entry</span>
           <span className="text-xs font-mono">{p.rsi_at_entry?.toFixed(1) ?? '-'}</span>
         </div>
         <div>
           <span className="text-[10px] text-text-secondary block">Win Rate</span>
-          <span className={`text-xs ${p.live_win_rate >= 70 ? 'text-profit' : p.live_win_rate >= 50 ? 'text-text-primary' : 'text-loss'}`}>
+          <span className={`text-xs font-medium ${p.live_win_rate >= 70 ? 'text-profit' : p.live_win_rate >= 50 ? 'text-text-primary' : 'text-loss'}`}>
             {p.live_win_rate.toFixed(1)}%
           </span>
         </div>
         <div className="text-right">
           <span className="text-[10px] text-text-secondary block">Risk DD</span>
-          <span className={`text-xs ${p.risk_dd > 10 ? 'text-loss' : 'text-text-secondary'}`}>
+          <span className={`text-xs font-medium ${p.risk_dd > 10 ? 'text-loss' : 'text-text-secondary'}`}>
             {p.risk_dd.toFixed(1)}%
           </span>
         </div>
@@ -158,7 +159,7 @@ function PositionCard({ p }: { p: CoinSlotStatus }) {
 
       {/* Entry Reason */}
       {p.entry_reason && (
-        <div className="mt-2 pt-2 border-t border-border/30">
+        <div className="mt-2 pt-2 border-t border-border/50">
           <span className="text-[10px] text-text-secondary">
             {p.entry_reason}
           </span>
@@ -173,7 +174,7 @@ export default function ActivePositions() {
 
   if (positions.length === 0) {
     return (
-      <div className="bg-bg-secondary border border-border rounded-xl p-6 text-center text-text-secondary">
+      <div className="bg-bg-secondary border border-border rounded-xl p-6 text-center text-text-secondary shadow-sm">
         No active positions
       </div>
     );
@@ -189,7 +190,7 @@ export default function ActivePositions() {
         <h3 className="text-sm font-semibold flex items-center gap-2">
           Active Positions
           {trading.length > 0 && (
-            <span className="px-1.5 py-0.5 rounded-full bg-accent/20 text-accent text-xs font-mono">
+            <span className="px-1.5 py-0.5 rounded-full bg-indigo-50 text-accent text-xs font-mono font-semibold">
               {trading.length} trading
             </span>
           )}
@@ -207,34 +208,34 @@ export default function ActivePositions() {
 
       {/* Idle/Drain positions — compact table */}
       {idle.length > 0 && (
-        <div className="bg-bg-secondary border border-border rounded-xl overflow-hidden">
+        <div className="bg-bg-secondary border border-border rounded-xl overflow-hidden shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-text-secondary text-xs border-b border-border">
-                  <th className="px-4 py-2 text-left">Coin</th>
-                  <th className="px-4 py-2 text-left">Strategy</th>
-                  <th className="px-4 py-2 text-right">Win Rate</th>
-                  <th className="px-4 py-2 text-right">Risk DD</th>
-                  <th className="px-4 py-2 text-center">Status</th>
+                <tr className="text-text-secondary text-xs border-b border-border bg-bg-tertiary">
+                  <th className="px-4 py-2.5 text-left font-medium">Coin</th>
+                  <th className="px-4 py-2.5 text-left font-medium">Strategy</th>
+                  <th className="px-4 py-2.5 text-right font-medium">Win Rate</th>
+                  <th className="px-4 py-2.5 text-right font-medium">Risk DD</th>
+                  <th className="px-4 py-2.5 text-center font-medium">Status</th>
                 </tr>
               </thead>
               <tbody>
                 {idle.map((p) => (
-                  <tr key={p.coin} className="border-b border-border/50 hover:bg-bg-tertiary/30">
+                  <tr key={p.coin} className="border-b border-border/50 hover:bg-bg-tertiary/50 transition-colors">
                     <td className="px-4 py-2.5 font-medium">{p.coin}</td>
                     <td className="px-4 py-2.5 text-text-secondary text-xs">{p.strategy}</td>
-                    <td className={`px-4 py-2.5 text-right ${p.live_win_rate >= 70 ? 'text-profit' : p.live_win_rate >= 50 ? 'text-text-primary' : 'text-loss'}`}>
+                    <td className={`px-4 py-2.5 text-right font-medium ${p.live_win_rate >= 70 ? 'text-profit' : p.live_win_rate >= 50 ? 'text-text-primary' : 'text-loss'}`}>
                       {p.live_win_rate.toFixed(1)}%
                     </td>
-                    <td className={`px-4 py-2.5 text-right ${p.risk_dd > 10 ? 'text-loss' : 'text-text-secondary'}`}>
+                    <td className={`px-4 py-2.5 text-right ${p.risk_dd > 10 ? 'text-loss font-medium' : 'text-text-secondary'}`}>
                       {p.risk_dd.toFixed(1)}%
                     </td>
                     <td className="px-4 py-2.5 text-center">
                       {p.draining ? (
-                        <span className="px-2 py-0.5 rounded bg-loss/20 text-loss text-xs">DRAIN</span>
+                        <span className="px-2 py-0.5 rounded-full bg-red-50 text-red-600 text-xs font-medium">DRAIN</span>
                       ) : (
-                        <span className="px-2 py-0.5 rounded bg-bg-tertiary text-text-secondary text-xs">IDLE</span>
+                        <span className="px-2 py-0.5 rounded-full bg-gray-100 text-text-secondary text-xs">IDLE</span>
                       )}
                     </td>
                   </tr>

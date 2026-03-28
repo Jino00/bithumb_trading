@@ -33,7 +33,7 @@ MONITOR_ATR_LOOKBACK = 50          # ATR 평균 비교 기간 (봉)
 MONITOR_PERF_MIN_TRADES = 5        # 성과 판단 최소 거래 수
 MONITOR_PERF_MIN_WR = 20.0         # 성과 하락 승률 기준 %
 MONITOR_VOL_SPIKE_MULT = 3.0       # 거래량 급등 배수
-MONITOR_VOL_DRY_MULT = 0.2         # 거래량 고갈 배수
+MONITOR_VOL_DRY_MULT = 0.05        # 거래량 고갈 배수 (완화: 0.2→0.05)
 MONITOR_VOL_MA_PERIOD = 20         # 거래량 이동평균 기간
 
 

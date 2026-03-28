@@ -1,4 +1,4 @@
-// 페이퍼 트레이딩 자본 곡선 — Recharts AreaChart.
+// 페이퍼 트레이딩 자본 곡선 — Recharts AreaChart (Light theme).
 import {
   AreaChart,
   Area,
@@ -18,13 +18,12 @@ interface Props {
 export default function PaperEquityCurve({ data, initialCapital }: Props) {
   if (data.length === 0) {
     return (
-      <div className="bg-bg-secondary border border-border rounded-xl p-6 text-center text-text-secondary h-64 flex items-center justify-center">
+      <div className="bg-bg-secondary border border-border rounded-xl p-6 text-center text-text-secondary h-64 flex items-center justify-center shadow-sm">
         자본 곡선 데이터 없음
       </div>
     );
   }
 
-  // 시작점 추가
   const chartData = [
     { timestamp: '시작', balance: initialCapital },
     ...data,
@@ -32,45 +31,34 @@ export default function PaperEquityCurve({ data, initialCapital }: Props) {
 
   const lastBalance = data[data.length - 1].balance;
   const isProfit = lastBalance >= initialCapital;
+  const lineColor = isProfit ? '#16a34a' : '#dc2626';
 
   return (
-    <div className="bg-bg-secondary border border-border rounded-xl p-4">
+    <div className="bg-bg-secondary border border-border rounded-xl p-4 shadow-sm">
       <h3 className="text-sm font-semibold mb-3">자본 곡선</h3>
       <ResponsiveContainer width="100%" height={250}>
         <AreaChart data={chartData}>
           <defs>
             <linearGradient id="paperEquityGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop
-                offset="5%"
-                stopColor={isProfit ? '#00c087' : '#e74c3c'}
-                stopOpacity={0.3}
-              />
-              <stop
-                offset="95%"
-                stopColor={isProfit ? '#00c087' : '#e74c3c'}
-                stopOpacity={0}
-              />
+              <stop offset="5%" stopColor={lineColor} stopOpacity={0.15} />
+              <stop offset="95%" stopColor={lineColor} stopOpacity={0} />
             </linearGradient>
           </defs>
           <XAxis
             dataKey="timestamp"
-            tick={{ fill: '#8899a6', fontSize: 10 }}
-            axisLine={{ stroke: '#2d3748' }}
+            tick={{ fill: '#94a3b8', fontSize: 10 }}
+            axisLine={{ stroke: '#e2e8f0' }}
             interval="preserveStartEnd"
           />
           <YAxis
-            tick={{ fill: '#8899a6', fontSize: 11 }}
-            axisLine={{ stroke: '#2d3748' }}
+            tick={{ fill: '#94a3b8', fontSize: 11 }}
+            axisLine={{ stroke: '#e2e8f0' }}
             domain={['auto', 'auto']}
             tickFormatter={(v) => `${(v / 10000).toFixed(0)}만`}
           />
           <Tooltip
-            contentStyle={{
-              background: '#1a2332',
-              border: '1px solid #2d3748',
-              borderRadius: 8,
-            }}
-            labelStyle={{ color: '#8899a6' }}
+            contentStyle={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}
+            labelStyle={{ color: '#64748b' }}
             formatter={(value: number | undefined) => [
               `${(value ?? 0).toLocaleString()}원`,
               '잔고',
@@ -78,18 +66,14 @@ export default function PaperEquityCurve({ data, initialCapital }: Props) {
           />
           <ReferenceLine
             y={initialCapital}
-            stroke="#2d3748"
+            stroke="#e2e8f0"
             strokeDasharray="3 3"
-            label={{
-              value: '시작',
-              fill: '#8899a6',
-              fontSize: 10,
-            }}
+            label={{ value: '시작', fill: '#94a3b8', fontSize: 10 }}
           />
           <Area
             type="monotone"
             dataKey="balance"
-            stroke={isProfit ? '#00c087' : '#e74c3c'}
+            stroke={lineColor}
             fill="url(#paperEquityGrad)"
             strokeWidth={2}
           />

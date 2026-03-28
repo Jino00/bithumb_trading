@@ -11,6 +11,7 @@ import type {
   SystemEvent,
   CompletedTrade,
   PaperOverview,
+  ScreeningOverview,
 } from '../types';
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -129,6 +130,32 @@ export function usePaperOverview() {
   return useQuery<PaperOverview>({
     queryKey: ['paper', 'overview'],
     queryFn: () => fetchJson('/api/paper/overview'),
+    refetchInterval: 2000,  // ★ 2초 간격 실시간 갱신
+  });
+}
+
+export function useScreeningOverview() {
+  return useQuery<ScreeningOverview>({
+    queryKey: ['screening', 'overview'],
+    queryFn: () => fetchJson('/api/screening/overview'),
+    refetchInterval: 5000,
+  });
+}
+
+// ── Trade Journal ──────────────────────────────────────────
+
+export function useJournalEntries(limit = 50) {
+  return useQuery<any[]>({
+    queryKey: ['journal', 'entries', limit],
+    queryFn: () => fetchJson(`/api/journal/entries?limit=${limit}`),
+    refetchInterval: 5000,
+  });
+}
+
+export function useJournalSummary() {
+  return useQuery<any>({
+    queryKey: ['journal', 'summary'],
+    queryFn: () => fetchJson('/api/journal/summary'),
     refetchInterval: 5000,
   });
 }

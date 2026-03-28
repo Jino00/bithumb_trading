@@ -177,7 +177,11 @@ class PaperPositionInfo(BaseModel):
     sl_pct: float
     tp_pct: float
     strategy: str
+    strategy_name: str = ""
     invested_krw: float = 0
+    unrealized_pnl_pct: float = 0.0
+    unrealized_krw: float = 0.0
+    current_price: float = 0.0
 
 
 class PaperTriggerEvent(BaseModel):
@@ -209,10 +213,12 @@ class PaperEquityPoint(BaseModel):
 
 
 class PaperCoinSlotInfo(BaseModel):
-    """멀티코인 모드: 개별 코인 슬롯 정보."""
+    """멀티코인 모드: 개별 코인 슬롯 실시간 정보."""
     coin: str
     allocated_krw: float = 0
     balance_krw: float = 0
+    current_price: float = 0.0
+    price_change_pct: float = 0.0
     active_strategy_id: str = ""
     active_strategy_name: str = ""
     regime: str = "UNKNOWN"
@@ -220,10 +226,15 @@ class PaperCoinSlotInfo(BaseModel):
     total_trades: int = 0
     win_rate: float = 0.0
     total_return_pct: float = 0.0
+    unrealized_krw: float = 0.0
     position: Optional[PaperPositionInfo] = None
     draining: bool = False
     activated_at: Optional[str] = None
     allocation_weight: float = 1.0
+    interval: str = "1h"
+    is_fixed: bool = False
+    stay_hours: float = 0.0
+    volatility_tier: str = "NORMAL"
 
 
 class PaperPortfolioKPI(BaseModel):
@@ -240,6 +251,19 @@ class PaperPortfolioKPI(BaseModel):
     blacklist: list[str] = []
 
 
+class InsightActionsInfo(BaseModel):
+    """학습 인사이트 — 현재 활성 중인 제어 명령들."""
+    blocked_combos: list[str] = []
+    blocked_hours: list[int] = []
+    strategy_scores: dict[str, float] = {}
+    tier_scales: dict[str, float] = {}
+    sl_widen: bool = False
+    consecutive_losses: int = 0
+    max_consecutive_losses: int = 0
+    disabled_strategies: list[str] = []
+    active_filters: list[str] = []
+
+
 class PaperOverview(BaseModel):
     updated_at: Optional[str] = None
     mode: str = "SINGLE"
@@ -251,6 +275,7 @@ class PaperOverview(BaseModel):
     triggers: list[PaperTriggerEvent] = []
     trades: list[PaperTradeRecord] = []
     equity_curve: list[PaperEquityPoint] = []
+    insight_actions: Optional[InsightActionsInfo] = None
 
 
 # ── WebSocket ─────────────────────────────────────────────────────

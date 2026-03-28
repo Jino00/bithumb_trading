@@ -96,8 +96,8 @@ class TestGetDefaultParams:
 class TestRunnersMapping:
     """_RUNNERS 전략 매핑 테스트."""
 
-    def test_all_six_strategies_registered(self):
-        assert len(_RUNNERS) == 6
+    def test_all_seven_strategies_registered(self):
+        assert len(_RUNNERS) == 7
 
     def test_runner_entries_have_name_and_fn(self):
         for sid, (name, fn) in _RUNNERS.items():
@@ -105,7 +105,7 @@ class TestRunnersMapping:
             assert callable(fn)
 
     def test_expected_strategy_ids(self):
-        assert set(_RUNNERS.keys()) == {"S1", "S2", "S3", "S4", "S5", "S6"}
+        assert set(_RUNNERS.keys()) == {"S1", "S2", "S3", "S4", "S5", "S6", "S7"}
 
 
 class TestStrategyScore:
@@ -203,12 +203,14 @@ class TestStrategyEvaluatorEvaluate:
         regimes = compute_regime(df)
         return df, regimes
 
-    def test_evaluate_all_returns_6_scores(self):
+    def test_evaluate_all_returns_active_scores(self):
+        """비활성 전략 제외한 활성 전략만 스코어링."""
         df, regimes = self._make_df()
         e = StrategyEvaluator()
         result = e.evaluate_all(df, regimes)
         assert isinstance(result, EvaluationResult)
-        assert len(result.scores) == 6
+        # S7_SMC, S6_SMMA 비활성 → 7 - 2 = 5개
+        assert len(result.scores) == 5
         assert result.evaluation_candles == len(df)
 
     def test_evaluate_all_scores_sorted_descending(self):

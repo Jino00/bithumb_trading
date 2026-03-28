@@ -42,3 +42,4 @@ docker-compose.override.yml
 
 # Claude work memory (session-specific)
 .claude/memory/modified-files.log
+.gstack/

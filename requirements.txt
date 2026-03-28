@@ -11,3 +11,6 @@ python-dotenv==1.2.1
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 websockets>=13.0
+
+# Gemini API (YouTube strategy analysis)
+google-genai>=1.0.0

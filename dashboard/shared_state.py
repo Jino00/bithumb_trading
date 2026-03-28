@@ -401,6 +401,56 @@ def _build_paper_state(trader) -> dict:
     }
 
 
+def _collect_insight_actions(manager) -> dict:
+    """학습 인사이트 액션을 대시보드용 dict로 수집."""
+    try:
+        from learning.trade_insight_engine import TradeInsightEngine
+        from strategy.strategy_selector import DISABLED_STRATEGIES
+
+        # 첫 번째 슬롯의 insight_engine에서 데이터 추출
+        engine = None
+        for slot in manager._slots.values():
+            eng = getattr(slot.trader, "_insight_engine", None)
+            if eng and isinstance(eng, TradeInsightEngine):
+                engine = eng
+                break
+
+        if engine is None:
+            engine = TradeInsightEngine()
+
+        actions = engine.get_actions()
+        manual_hours = getattr(config, "MANUAL_BLOCKED_HOURS", set())
+        all_blocked = sorted(actions.blocked_hours | manual_hours)
+
+        active_filters = [
+            f"200 EMA 추세 필터 (span={getattr(config, 'SCALP_EMA_TREND_FILTER', 200)})",
+            f"도지 캔들 필터 (body<{getattr(config, 'SCALP_DOJI_BODY_RATIO', 0.1)*100:.0f}%)",
+        ]
+        if manual_hours:
+            active_filters.append(
+                f"{sorted(manual_hours)}시 매매 중단"
+            )
+        if actions.should_widen_sl:
+            active_filters.append(
+                f"SL 자동 확대 (+{actions.sl_widen_pct}%)"
+            )
+
+        return {
+            "blocked_combos": sorted(actions.blocked_strategy_regimes),
+            "blocked_hours": all_blocked,
+            "strategy_scores": actions.strategy_scores,
+            "tier_scales": actions.tier_position_scale,
+            "sl_widen": actions.should_widen_sl,
+            "consecutive_losses": actions.consecutive_losses,
+            "max_consecutive_losses": actions.max_consecutive_losses,
+            "disabled_strategies": list(DISABLED_STRATEGIES.keys()),
+            "active_filters": active_filters,
+        }
+    except Exception as e:
+        logger.warning(f"인사이트 수집 실패: {e}")
+        return {}
+
+
 def _build_paper_portfolio_state(manager) -> dict:
     """PaperPortfolioManager → 대시보드용 JSON dict 변환 (멀티코인)."""
     total_value = manager.portfolio_total_value()
@@ -453,14 +503,37 @@ def _build_paper_portfolio_state(manager) -> dict:
         t_wins = sum(1 for tr in t._trades if tr.pnl_krw > 0)
         t_total = len(t._trades)
         t_wr = (t_wins / t_total * 100) if t_total > 0 else 0
+
+        # ★ 실시간 가격 정보 (아직 사이클 전이면 API에서 조회 시도)
+        cur_price = getattr(t, "_last_price", None) or 0
+        if cur_price == 0:
+            try:
+                cur_price = t._client.get_current_price(coin) or 0
+            except Exception:
+                cur_price = 0
+        prev_price = getattr(t, "_prev_price", None) or cur_price
+        price_change_pct = round(
+            (cur_price - prev_price) / prev_price * 100, 2
+        ) if prev_price > 0 and cur_price > 0 else 0.0
+
+        # ★ 실시간 자산 평가 (현재가 기반)
         t_val = t._balance_krw
+        unrealized_krw = 0.0
         if t._position:
-            t_val += t._position.quantity * t._position.entry_price
+            market_val = t._position.quantity * cur_price if cur_price > 0 else (
+                t._position.quantity * t._position.entry_price
+            )
+            t_val += market_val
+            unrealized_krw = market_val - t._position.invested_krw
         t_ret = ((t_val / slot.allocated_krw) - 1) * 100 if slot.allocated_krw > 0 else 0
 
         pos_info = None
         if t._position:
             pos = t._position
+            p = cur_price if cur_price > 0 else pos.entry_price
+            unrealized_pnl_pct = round(
+                (p - pos.entry_price) / pos.entry_price * 100, 2
+            ) if pos.entry_price > 0 else 0.0
             pos_info = {
                 "coin": pos.coin,
                 "entry_price": round(pos.entry_price, 0),
@@ -469,13 +542,19 @@ def _build_paper_portfolio_state(manager) -> dict:
                 "sl_pct": pos.sl_pct,
                 "tp_pct": pos.tp_pct,
                 "strategy": pos.strategy,
+                "strategy_name": pos.strategy,
                 "invested_krw": round(pos.invested_krw, 0),
+                "unrealized_pnl_pct": unrealized_pnl_pct,
+                "unrealized_krw": round(unrealized_krw, 0),
+                "current_price": round(p, 0),
             }
 
         positions.append({
             "coin": coin,
             "allocated_krw": round(slot.allocated_krw, 0),
             "balance_krw": round(t._balance_krw, 0),
+            "current_price": round(cur_price, 0),
+            "price_change_pct": price_change_pct,
             "active_strategy_id": t._active_strategy_id,
             "active_strategy_name": t._active_strategy_name,
             "regime": t._monitor.current_regime,
@@ -483,10 +562,15 @@ def _build_paper_portfolio_state(manager) -> dict:
             "total_trades": t_total,
             "win_rate": round(t_wr, 1),
             "total_return_pct": round(t_ret, 2),
+            "unrealized_krw": round(unrealized_krw, 0),
             "position": pos_info,
             "draining": slot.draining,
             "activated_at": slot.activated_at.isoformat(timespec="seconds"),
             "allocation_weight": round(slot.allocation_weight, 2),
+            "interval": getattr(slot, "interval", "1h"),
+            "is_fixed": getattr(slot, "is_fixed", False),
+            "stay_hours": round(getattr(slot, "stay_hours", 0), 1),
+            "volatility_tier": getattr(t, "_volatility_tier", "NORMAL"),
         })
 
     # 전체 거래 이력 (최근 200건)
@@ -530,6 +614,26 @@ def _build_paper_portfolio_state(manager) -> dict:
             "balance": round(running, 0),
         })
 
+    # 벤치(대기석) 정보
+    bench_coins = []
+    bench = getattr(manager, "_bench", None)
+    if bench:
+        for bc in bench.all_coins():
+            bench_coins.append({
+                "symbol": bc.symbol,
+                "interval": bc.interval,
+                "range_pct": round(bc.score.range_pct, 2),
+                "volume_krw": round(bc.score.volume_krw, 0),
+                "latest_price": round(bc.latest_price, 0),
+                "latest_volume_krw": round(bc.latest_volume_krw, 0),
+                "wait_hours": round(bc.wait_hours, 1),
+                "is_eligible": bc.is_eligible,
+                "monitoring_count": bc.monitoring_count,
+            })
+
+    # ── 학습 인사이트 수집 ──
+    insight_actions = _collect_insight_actions(manager)
+
     return {
         "updated_at": datetime.now().isoformat(timespec="seconds"),
         "mode": "MULTI",
@@ -537,10 +641,12 @@ def _build_paper_portfolio_state(manager) -> dict:
         "portfolio_kpi": portfolio_kpi,
         "position": None,
         "positions": positions,
+        "bench_coins": bench_coins,
         "eval_scores": [],
         "triggers": triggers,
         "trades": trades,
         "equity_curve": equity_curve,
+        "insight_actions": insight_actions,
     }
 
 
