@@ -375,6 +375,16 @@ class PaperPortfolioManager:
 
         if new_trades > 0:
             self._trades_since_last_adapt += new_trades
+
+            # ★ 거래 완료된 코인 성과 체크 → 자동 차단
+            with self._slot_lock:
+                for coin in list(trades_before.keys()):
+                    prev = trades_before.get(coin, 0)
+                    if coin in self._slots:
+                        now_count = self._slots[coin].trader._trade_adapter.trade_count
+                        if now_count > prev:
+                            self._check_coin_performance(coin)
+
             if self._trades_since_last_adapt >= self._adapt_trade_trigger:
                 if self._verbose:
                     print(f"[학습] ★ 이벤트 트리거: {self._trades_since_last_adapt}건 "
@@ -642,6 +652,10 @@ class PaperPortfolioManager:
         """코인 활성화 시도 — 최소 점수 + 최소 자본 충족 시에만."""
         coin = score.symbol
 
+        # ★ 영구 블랙리스트 체크
+        if coin in config.PERMANENT_BLACKLIST:
+            return False
+
         # ★ 최소 자본 확인 (코인당 최소 50만원)
         min_alloc = config.MIN_COIN_ALLOCATION_KRW
         if self._unallocated_krw < min_alloc:
@@ -733,6 +747,8 @@ class PaperPortfolioManager:
 
     def _try_activate_fixed(self, coin: str, interval: str) -> bool:
         """고정 슬롯 전용 활성화 (BTC/ETH, 블랙리스트 면제)."""
+        if coin in config.PERMANENT_BLACKLIST:
+            return False
         if coin in self._slots:
             return True  # 이미 활성화됨
 
@@ -1023,6 +1039,22 @@ class PaperPortfolioManager:
         self._try_activate(bench_best.score, bench_best.interval)
 
     # ── 블랙리스트 ────────────────────────────────────────────
+
+    def _check_coin_performance(self, coin: str) -> None:
+        """코인별 성과 기반 자동 차단 — 거래 종료 후 호출."""
+        if coin not in self._slots:
+            return
+        trades = self._slots[coin].trader._trades
+        if len(trades) < config.COIN_PERF_MIN_TRADES:
+            return
+        wins = sum(1 for t in trades if t.pnl_krw > 0)
+        wr = wins / len(trades) * 100
+        total_pnl = sum(t.pnl_krw for t in trades)
+        if wr < config.COIN_PERF_BLOCK_WR and total_pnl < config.COIN_PERF_BLOCK_LOSS_KRW:
+            expires = datetime.now() + timedelta(hours=config.COIN_PERF_BLOCK_TTL_HOURS)
+            self._blacklist[coin] = expires
+            print(f"[성과차단] {coin}: {len(trades)}건 WR {wr:.0f}%, "
+                  f"PnL {total_pnl:,.0f}원 → {config.COIN_PERF_BLOCK_TTL_HOURS}h 차단")
 
     def _add_blacklist(self, coin: str, reason: str) -> None:
         """코인을 블랙리스트에 추가 (24시간 차단)."""

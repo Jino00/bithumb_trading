@@ -511,6 +511,25 @@ class AdaptivePaperTrader:
         # ★ 인사이트 기반 티어별 포지션 축소 (EXTREME/HOT 승률 <25%면 축소)
         invest_krw = self._apply_tier_scaling(invest_krw)
 
+        # ★ SIDEWAYS 레짐 포지션 축소 (48% 승률, -2,461만원)
+        current_regime = getattr(self._monitor, "current_regime", "UNKNOWN")
+        if current_regime == "SIDEWAYS" and config.SIDEWAYS_POSITION_SCALE < 1.0:
+            invest_krw = int(invest_krw * config.SIDEWAYS_POSITION_SCALE)
+            if self._verbose:
+                print(f"  📊 SIDEWAYS 축소: ×{config.SIDEWAYS_POSITION_SCALE}")
+
+        # ★ 연속 손실 점진적 축소 (2연패 70%, 3연패 50%, 4연패 30%)
+        actions_for_sizing = self._insight_engine.get_actions()
+        consec = actions_for_sizing.consecutive_losses
+        consec_scale = 1.0
+        for threshold in sorted(config.CONSEC_LOSS_SCALES.keys()):
+            if consec >= threshold:
+                consec_scale = config.CONSEC_LOSS_SCALES[threshold]
+        if consec_scale < 1.0:
+            invest_krw = int(invest_krw * consec_scale)
+            if self._verbose:
+                print(f"  📊 연속 {consec}패 축소: ×{consec_scale}")
+
         # GARCH 동적 SL/TP 조정
         sl_pct, tp_pct = self._adjust_sl_tp_by_garch(ctx.sl_pct, ctx.tp_pct)
 
@@ -781,6 +800,12 @@ class AdaptivePaperTrader:
                     print(f"     • {l.get('lesson_type','')}: {l.get('description','')[:60]}")
 
             self._log_active_insight_actions(actions)
+
+            # ★ 거래 종료 직후 SL/TP 즉시 재계산 (6시간 대기 제거)
+            if len(self._trades) >= 5:
+                adapted = self._adapt_sl_tp_by_recent_performance()
+                if adapted > 0:
+                    print(f"  🔧 즉시 학습: SL/TP {adapted}건 조정 반영")
         except Exception as e:
             print(f"  [인사이트] 분석 오류: {e}")
             import traceback
@@ -879,6 +904,15 @@ class AdaptivePaperTrader:
                           f"PnL {pnl_pct:+.2f}% ≥ {min_tp}% → 확정")
                 self._execute_sell(price, "TIME_TP")
                 return
+
+        # ★ 30분 초과 + 손실: 즉시 청산 (승리 22분 vs 패배 31분 데이터)
+        max_hold = config.MAX_HOLD_MINUTES
+        if hold_min >= max_hold and pnl_pct < 0:
+            if self._verbose:
+                print(f"  ⏰ {max_hold}분 초과 손절: {hold_min}분 + "
+                      f"PnL {pnl_pct:+.2f}% → 즉시 청산")
+            self._execute_sell(price, "TIME_SL")
+            return
 
         # 장기 보유 손절: 2시간 이상 보유 + 손실 중 → 기회비용 방지
         if hold_min >= 120 and pnl_pct < 0:
