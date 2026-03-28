@@ -1,4 +1,5 @@
 // 에쿼티 커브 — Recharts 영역 차트 (Light theme).
+import { TrendingUp } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { useEquityCurve } from '../../hooks/useApi';
 
@@ -7,8 +8,12 @@ export default function EquityCurve() {
 
   if (isLoading || !curve || curve.length === 0) {
     return (
-      <div className="bg-bg-secondary border border-border rounded-xl p-6 text-center text-text-secondary h-64 flex items-center justify-center shadow-sm">
-        {isLoading ? 'Loading...' : 'No equity data'}
+      <div className="bg-bg-secondary border border-border rounded-xl p-10 text-center shadow-sm h-64 flex flex-col items-center justify-center">
+        <TrendingUp className="w-10 h-10 text-text-secondary/40 mb-3" />
+        <p className="text-sm font-medium text-text-primary mb-1">
+          {isLoading ? '데이터 로딩 중...' : '에쿼티 데이터 없음'}
+        </p>
+        <p className="text-xs text-text-secondary">거래가 완료되면 수익 곡선이 여기에 표시됩니다</p>
       </div>
     );
   }

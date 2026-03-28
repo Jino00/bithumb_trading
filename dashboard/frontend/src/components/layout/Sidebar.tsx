@@ -29,7 +29,7 @@ export default function Sidebar({ onNavClick }: { onNavClick?: () => void }) {
   );
 
   return (
-    <aside className="w-56 bg-bg-secondary border-r border-border flex flex-col">
+    <aside className="w-56 h-full bg-bg-secondary border-r border-border flex flex-col overflow-y-auto">
       {/* Navigation */}
       <nav className="p-3 space-y-0.5">
         {navItems.map((item) => {

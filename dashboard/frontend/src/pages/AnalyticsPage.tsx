@@ -60,7 +60,7 @@ export default function AnalyticsPage() {
               </PieChart>
             </ResponsiveContainer>
           ) : (
-            <div className="text-text-secondary text-sm">No data</div>
+            <div className="text-text-secondary text-sm py-8 text-center">거래 데이터가 쌓이면 표시됩니다</div>
           )}
         </div>
 
@@ -91,7 +91,7 @@ export default function AnalyticsPage() {
               </tbody>
             </table>
           ) : (
-            <div className="text-text-secondary text-sm">No data</div>
+            <div className="text-text-secondary text-sm py-8 text-center">거래 데이터가 쌓이면 표시됩니다</div>
           )}
         </div>
       </div>

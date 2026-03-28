@@ -1,21 +1,32 @@
-// WebSocket 커넥션 훅 — 자동 재연결 + Zustand 스토어 업데이트.
+// WebSocket 커넥션 훅 — exponential backoff + 최대 재시도 제한.
 import { useEffect, useRef } from 'react';
 import { useBotStore } from '../stores/botStore';
 import type { LiveStateUpdate } from '../types';
+
+const MAX_RETRIES = 10;
+const BASE_DELAY_MS = 2000;
+const MAX_DELAY_MS = 60000;
 
 export function useWebSocket() {
   const setConnected = useBotStore((s) => s.setConnected);
   const setLiveState = useBotStore((s) => s.setLiveState);
   const wsRef = useRef<WebSocket | null>(null);
   const retryRef = useRef(0);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    let unmounted = false;
+
     function connect() {
+      if (unmounted) return;
+      if (retryRef.current >= MAX_RETRIES) {
+        setConnected(false);
+        return;
+      }
+
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const host = window.location.host;
-      const url = `${protocol}//${host}/ws/live`;
-
-      const ws = new WebSocket(url);
+      const ws = new WebSocket(`${protocol}//${host}/ws/live`);
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -33,10 +44,11 @@ export function useWebSocket() {
       };
 
       ws.onclose = () => {
+        if (unmounted) return;
         setConnected(false);
-        const delay = Math.min(1000 * 2 ** retryRef.current, 30000);
+        const delay = Math.min(BASE_DELAY_MS * 2 ** retryRef.current, MAX_DELAY_MS);
         retryRef.current += 1;
-        setTimeout(connect, delay);
+        timerRef.current = setTimeout(connect, delay);
       };
 
       ws.onerror = () => {
@@ -47,6 +59,8 @@ export function useWebSocket() {
     connect();
 
     return () => {
+      unmounted = true;
+      if (timerRef.current) clearTimeout(timerRef.current);
       wsRef.current?.close();
     };
   }, [setConnected, setLiveState]);
