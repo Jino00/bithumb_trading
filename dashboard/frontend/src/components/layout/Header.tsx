@@ -44,7 +44,9 @@ export default function Header({ onMenuToggle }: HeaderProps) {
       <div className="hidden md:flex items-center gap-5">
         <div className="text-center">
           <div className="text-[10px] text-text-secondary uppercase tracking-wider">P&L</div>
-          <div className={`text-sm font-bold ${pnlColor}`}>
+          <div className={`font-bold ${pnlColor} ${
+            Math.abs(pnlPct) >= 50 ? 'text-lg' : Math.abs(pnlPct) >= 10 ? 'text-base' : 'text-sm'
+          }`}>
             {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%
           </div>
         </div>
