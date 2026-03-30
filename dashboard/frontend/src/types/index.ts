@@ -231,6 +231,35 @@ export interface InsightActionsInfo {
   active_filters: string[];
 }
 
+export interface SurgeSlotInfo {
+  coin: string;
+  phase: string;
+  entry_time: string;
+  allocated_krw: number;
+}
+
+export interface SurgeLearningStats {
+  total: number;
+  wins: number;
+  win_rate: number;
+  total_pnl: number;
+  avg_pnl_pct: number;
+  avg_hold_sec: number;
+  by_phase: Record<string, { count: number; win_rate: number; avg_pnl: number }>;
+  top_coins: Array<{ coin: string; count: number }>;
+}
+
+export interface SurgeSlotsInfo {
+  active_slots: number;
+  max_slots: number;
+  capital: number;
+  trade_count: number;
+  total_pnl: number;
+  learning_stats: SurgeLearningStats;
+  optimal_params: { trailing_pct: number; max_hold_sec: number };
+  slots: SurgeSlotInfo[];
+}
+
 export interface PaperOverview {
   updated_at: string | null;
   mode: string;
@@ -243,6 +272,7 @@ export interface PaperOverview {
   trades: PaperTradeRecord[];
   equity_curve: PaperEquityPoint[];
   insight_actions?: InsightActionsInfo;
+  surge_slots?: SurgeSlotsInfo;
 }
 
 // ── 3단계 파이프라인 스크리닝 ──────────────────────────────

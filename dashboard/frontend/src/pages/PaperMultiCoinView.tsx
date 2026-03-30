@@ -260,6 +260,107 @@ export default function PaperMultiCoinView({ data }: Props) {
         </div>
       )}
 
+      {/* 🚀 급등슬롯 (별도 섹션) */}
+      {data.surge_slots && (
+        <div className="bg-gradient-to-r from-orange-50 to-red-50 border-2 border-orange-300 rounded-2xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <span className="text-2xl">🚀</span>
+              <h2 className="text-lg font-bold text-orange-700">급등슬롯</h2>
+              <span className="text-xs bg-orange-200 text-orange-800 px-2 py-0.5 rounded-full font-medium">
+                {data.surge_slots.active_slots}/{data.surge_slots.max_slots}
+              </span>
+            </div>
+            <div className="text-xs text-orange-600">
+              자본 {fmtKrw(data.surge_slots.capital)} · 급등 코인만 추적 · 거래마다 학습
+            </div>
+          </div>
+
+          {/* KPI */}
+          <div className="grid grid-cols-4 gap-3 mb-4">
+            <div className="bg-white rounded-lg p-3 text-center shadow-sm">
+              <div className="text-xs text-gray-500">거래</div>
+              <div className="text-lg font-bold">{data.surge_slots.trade_count}건</div>
+            </div>
+            <div className="bg-white rounded-lg p-3 text-center shadow-sm">
+              <div className="text-xs text-gray-500">승률</div>
+              <div className="text-lg font-bold">
+                {data.surge_slots.learning_stats.total > 0
+                  ? `${data.surge_slots.learning_stats.win_rate.toFixed(0)}%`
+                  : '-'}
+              </div>
+            </div>
+            <div className="bg-white rounded-lg p-3 text-center shadow-sm">
+              <div className="text-xs text-gray-500">PnL</div>
+              <div className={`text-lg font-bold ${data.surge_slots.total_pnl >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                {data.surge_slots.total_pnl >= 0 ? '+' : ''}{fmtKrw(data.surge_slots.total_pnl)}
+              </div>
+            </div>
+            <div className="bg-white rounded-lg p-3 text-center shadow-sm">
+              <div className="text-xs text-gray-500">트레일링</div>
+              <div className="text-lg font-bold">{data.surge_slots.optimal_params.trailing_pct}%</div>
+            </div>
+          </div>
+
+          {/* 10개 슬롯 그리드 */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
+            {Array.from({ length: data.surge_slots.max_slots }).map((_, i) => {
+              const slot = data.surge_slots!.slots[i];
+              if (slot) {
+                return (
+                  <div key={i} className="bg-white border-2 border-orange-400 rounded-xl p-3 shadow-sm">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-bold text-orange-700">{slot.coin}</span>
+                      <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded">
+                        {slot.phase === 'IGNITION' ? '🔥' : '🚀'} {slot.phase}
+                      </span>
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      진입 {slot.entry_time.slice(11, 19)}
+                    </div>
+                    <div className="text-xs font-medium mt-1">
+                      {fmtKrw(slot.allocated_krw)}
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <div key={i} className="bg-gray-50 border border-dashed border-gray-300 rounded-xl p-3 flex items-center justify-center text-gray-400 text-xs">
+                  <Search className="w-3 h-3 mr-1 opacity-40" />
+                  스캔 대기
+                </div>
+              );
+            })}
+          </div>
+
+          {/* 학습 인사이트 */}
+          {data.surge_slots.learning_stats.total > 0 && (
+            <div className="bg-white rounded-lg p-3 shadow-sm">
+              <div className="text-xs font-semibold text-orange-700 mb-2">급등슬롯 학습 인사이트</div>
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div>
+                  {Object.entries(data.surge_slots.learning_stats.by_phase).map(([phase, ps]) => (
+                    <div key={phase} className="flex justify-between py-0.5">
+                      <span>{phase === 'IGNITION' ? '🔥' : '🚀'} {phase}</span>
+                      <span>{ps.count}건 · {ps.win_rate.toFixed(0)}% · {ps.avg_pnl >= 0 ? '+' : ''}{ps.avg_pnl.toFixed(2)}%</span>
+                    </div>
+                  ))}
+                </div>
+                <div>
+                  <div className="text-gray-500 mb-1">급등 빈도 TOP</div>
+                  {data.surge_slots.learning_stats.top_coins.slice(0, 3).map(c => (
+                    <div key={c.coin} className="flex justify-between py-0.5">
+                      <span className="font-medium">{c.coin}</span>
+                      <span>{c.count}회</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* 자본 곡선 */}
       <PaperEquityCurve
         data={data.equity_curve}
