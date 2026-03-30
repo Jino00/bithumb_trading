@@ -12,11 +12,14 @@
 """
 import argparse
 import json
+import logging
 import os
 import signal as signal_mod
 import sys
 import threading
 import time
+
+logger = logging.getLogger("portfolio")
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set
@@ -92,9 +95,21 @@ class PaperPortfolioManager:
         end_time: Optional[datetime] = None,
     ) -> None:
         self._initial_capital = max(initial_capital, 1.0)
-        self._unallocated_krw = self._initial_capital
+
+        # ── 자본 3등분: 메인 60% + 탐색 30% + 급등 10% ─────────
+        surge_capital = self._initial_capital * config.SURGE_SLOT_CAPITAL_RATIO
+        if config.EXPLORATION_ENABLED:
+            exploration_capital = self._initial_capital * config.EXPLORATION_CAPITAL_RATIO
+            main_capital = self._initial_capital - exploration_capital - surge_capital
+        else:
+            exploration_capital = 0.0
+            main_capital = self._initial_capital - surge_capital
+        self._exploration_capital = exploration_capital
+        self._surge_capital = surge_capital
+
+        self._unallocated_krw = main_capital
         self._max_positions = max(max_positions, 1)
-        self._per_coin_krw = self._initial_capital / self._max_positions
+        self._per_coin_krw = main_capital / self._max_positions
         self._scan_interval_min = scan_interval_min
         self._trading_interval_sec = trading_interval_sec
         self._report_interval_min = report_interval_min
@@ -148,6 +163,36 @@ class PaperPortfolioManager:
         self._running = False
         self._scan_count = 0
         self._cycle_count = 0
+        # ── 탐색 매니저 ────────────────────────────────────────
+        self._exploration = None
+        if config.EXPLORATION_ENABLED and exploration_capital > 0:
+            from exploration.exploration_manager import ExplorationManager
+            self._exploration = ExplorationManager(
+                capital=exploration_capital,
+                slot_count=config.EXPLORATION_SLOT_COUNT,
+                verbose=verbose,
+            )
+
+        # ── 이익 최대화 에이전트 ────────────────────────────────
+        from learning.profit_maximizer import ProfitMaximizer
+        self._profit_maximizer = ProfitMaximizer(verbose=verbose)
+
+        # ── 독립 CIO 에이전트 (외부 평가자) ───────────────────
+        from learning.cio_agent import CIOAgent
+        self._cio = CIOAgent()
+
+        # ── 학습 감시 에이전트 (워치독) ───────────────────────
+        from learning.learning_watchdog import LearningWatchdog
+        self._watchdog = LearningWatchdog()
+
+        # ── 급등 전용 슬롯 매니저 ────────────────────────────
+        from exploration.surge_slots import SurgeSlotManager
+        self._surge_slots = SurgeSlotManager(
+            capital=surge_capital,
+            max_slots=config.SURGE_SLOT_COUNT,
+            verbose=verbose,
+        )
+
         # ★ 이벤트 기반 학습: 거래 누적 카운터
         self._trades_since_last_adapt = 0
         self._adapt_trade_trigger = getattr(
@@ -247,6 +292,15 @@ class PaperPortfolioManager:
             self._realtime_whale.start()
             print(f"[고래] 실시간 고래 감지 시작: {len(all_tracked)}개 코인")
 
+        # Step 6: 탐색 슬롯 활성화
+        if self._exploration:
+            all_coins = list(self._slots.keys())
+            bench_coins = [bc.symbol for bc in self._bench.all_coins()]
+            exp_coins = list(set(all_coins + bench_coins))
+            exp_activated = self._exploration.startup(exp_coins or ["BTC"])
+            print(f"[탐색] {exp_activated}개 탐색 슬롯 활성화 "
+                  f"(자본: {self._exploration_capital:,.0f}원)")
+
         PaperStateWriter.update_portfolio(self)
         return True
 
@@ -280,6 +334,19 @@ class PaperPortfolioManager:
             ).do(self._safe_weekly_learning)
             print(f"[주간학습] 매주 {config.WEEKLY_LEARNER_DAY} "
                   f"{config.WEEKLY_LEARNER_TIME} 자동 실행 예약")
+
+        # ★ 탐색 슬롯 평가 스케줄
+        if self._exploration:
+            schedule.every(config.EXPLORATION_EVAL_INTERVAL_MIN).minutes.do(
+                self._safe_exploration_eval
+            )
+
+        # ★ 이익 최대화 에이전트 (30분마다)
+        schedule.every(30).minutes.do(self._safe_profit_maximizer)
+        # ★ 독립 CIO 평가 (30분마다, profit_maximizer와 교차 검증)
+        schedule.every(30).minutes.do(self._safe_cio_evaluation)
+        # ★ 학습 감시 워치독 (30분마다)
+        schedule.every(30).minutes.do(self._safe_watchdog)
 
         # 즉시 첫 인텔리전스 수집 + 트레이딩 사이클
         self._safe_intel_update()
@@ -399,8 +466,182 @@ class PaperPortfolioManager:
         with self._slot_lock:
             self._drain_no_strategy_slots()
 
+        # ★ 탐색 슬롯 매매 사이클
+        if self._exploration:
+            try:
+                self._exploration.trading_cycle()
+            except Exception as e:
+                logger.warning(f"[탐색] 사이클 오류: {e}")
+
+        # ★ 급등 전용 슬롯 매매 사이클
+        if self._surge_slots:
+            try:
+                self._surge_slots.trading_cycle()
+            except Exception as e:
+                logger.warning(f"[급등] 사이클 오류: {e}")
+
         # 대시보드 상태 갱신
         PaperStateWriter.update_portfolio(self)
+
+    def _safe_exploration_eval(self) -> None:
+        """탐색 슬롯 평가 + 교체 (30분마다)."""
+        if not self._exploration:
+            return
+        try:
+            coins = list(self._slots.keys())
+            bench = [bc.symbol for bc in self._bench.all_coins()]
+            available = list(set(coins + bench)) or ["BTC"]
+            results = self._exploration.evaluate_and_rotate(available)
+            if results["promoted"] > 0:
+                print(f"[탐색] {results['promoted']}개 변형 정식 승격!")
+        except Exception as e:
+            logger.warning(f"[탐색] 평가 오류: {e}")
+
+    def _safe_profit_maximizer(self) -> None:
+        """이익 최대화 에이전트 실행 (30분마다)."""
+        try:
+            from learning.profit_maximizer import apply_profit_actions
+            # 거래 데이터 수집
+            trades = [
+                {"coin": t.coin, "strategy": t.strategy,
+                 "pnl_pct": t.pnl_pct, "pnl_krw": t.pnl_krw,
+                 "exit_reason": t.exit_reason,
+                 "invested_krw": t.invested_krw,
+                 "entry_time": t.entry_time, "exit_time": t.exit_time}
+                for s in self._slots.values()
+                for t in s.trader._trades
+            ]
+            # 포지션 데이터
+            positions = [
+                {"coin": c, "allocated_krw": s.allocated_krw,
+                 "weight": s.allocation_weight,
+                 "has_position": s.trader._position is not None}
+                for c, s in self._slots.items()
+            ]
+            # 탐색 슬롯 데이터
+            exp_slots = []
+            if self._exploration:
+                exp_slots = [
+                    {"variant_id": s.variant.variant_id,
+                     "variant_type": s.variant.variant_type,
+                     "coin": s.coin,
+                     "description": s.variant.description,
+                     "trade_count": s.stats.trade_count,
+                     "win_rate": s.stats.win_rate,
+                     "profit_factor": s.stats.profit_factor,
+                     "total_pnl_krw": s.stats.total_pnl_krw}
+                    for s in self._exploration._slots.values()
+                ]
+            report = self._profit_maximizer.run(
+                trades, positions, exp_slots
+            )
+            # 액션 적용
+            if report.actions:
+                applied = apply_profit_actions(self, report.actions)
+                if applied > 0:
+                    self._rebalance_allocations()
+        except Exception as e:
+            logger.warning(f"[이익극대] 오류: {e}")
+
+    def _safe_watchdog(self) -> None:
+        """학습 감시 워치독 실행 (30분마다)."""
+        try:
+            trades = [
+                {"coin": t.coin, "strategy": t.strategy,
+                 "pnl_pct": t.pnl_pct, "pnl_krw": t.pnl_krw,
+                 "exit_reason": t.exit_reason,
+                 "invested_krw": t.invested_krw}
+                for s in self._slots.values()
+                for t in s.trader._trades
+            ]
+            ia = {}
+            try:
+                import json
+                with open("paper_state.json") as f:
+                    state = json.load(f)
+                ia = state.get("insight_actions", {})
+            except Exception:
+                pass
+
+            report = self._watchdog.check(trades, ia)
+
+            # BROKEN 상태면 경고 로그
+            if report.overall_status == "BROKEN":
+                logger.error(
+                    f"[워치독] 학습 시스템 BROKEN — "
+                    f"{len(report.alerts)}건 경고"
+                )
+        except Exception as e:
+            logger.warning(f"[워치독] 실행 오류: {e}")
+
+    def _safe_cio_evaluation(self) -> None:
+        """독립 CIO 평가 실행 (30분마다)."""
+        try:
+            from learning.profit_maximizer import apply_profit_actions
+            from learning.cio_agent import CIOAgent
+
+            # 거래 데이터 (코드가 아닌 결과만)
+            trades = [
+                {"coin": t.coin, "strategy": t.strategy,
+                 "pnl_pct": t.pnl_pct, "pnl_krw": t.pnl_krw,
+                 "exit_reason": t.exit_reason,
+                 "invested_krw": t.invested_krw}
+                for s in self._slots.values()
+                for t in s.trader._trades
+            ]
+            positions = [
+                {"coin": c, "allocated_krw": s.allocated_krw,
+                 "weight": s.allocation_weight}
+                for c, s in self._slots.items()
+            ]
+            exp_slots = []
+            if self._exploration:
+                exp_slots = [
+                    {"variant_id": s.variant.variant_id,
+                     "variant_type": s.variant.variant_type,
+                     "coin": s.coin,
+                     "description": s.variant.description,
+                     "trade_count": s.stats.trade_count,
+                     "win_rate": s.stats.win_rate,
+                     "profit_factor": s.stats.profit_factor,
+                     "total_pnl_krw": s.stats.total_pnl_krw}
+                    for s in self._exploration._slots.values()
+                ]
+            # 시장 데이터
+            market = {}
+            try:
+                from exchange.market_context import MarketContextFetcher
+                ctx = MarketContextFetcher().get()
+                market = {
+                    "fear_greed": ctx.fear_greed_index,
+                    "btc_dominance": ctx.btc_dominance,
+                }
+            except Exception:
+                market = {"fear_greed": 50, "btc_dominance": 50}
+
+            # CIO 평가 실행
+            verdict = self._cio.evaluate(trades, positions, exp_slots, market)
+
+            # CIO 조언에 따른 자본 배분 조정
+            for change in verdict.allocation_changes:
+                coin = change.get("coin", "")
+                if coin not in self._slots:
+                    continue
+                slot = self._slots[coin]
+                if change["action"] == "INCREASE":
+                    slot.allocation_weight = min(
+                        slot.allocation_weight * 1.2, 2.5
+                    )
+                elif change["action"] == "DECREASE":
+                    slot.allocation_weight = max(
+                        slot.allocation_weight * 0.8, 0.3
+                    )
+
+            if verdict.allocation_changes:
+                self._rebalance_allocations()
+
+        except Exception as e:
+            logger.warning(f"[CIO] 평가 오류: {e}")
 
     def _fast_check_volatile_positions(self) -> None:
         """★ 급등락 코인 포지션 실시간 모니터링 (10초마다).
@@ -583,66 +824,99 @@ class PaperPortfolioManager:
     def _rebalance_allocations(self) -> None:
         """활성 슬롯들의 자본을 가중치 비례로 배분한다.
 
-        ★ 전 슬롯 동적 — 스크리너가 실시간으로 최적 코인 자동 선택.
-        성과 좋은 코인에 더 많은 자본 배분 (가중치 기반).
-        빈 슬롯 자본은 미배분으로 대기 → 급등 감지 시 즉시 투입.
+        ★ 자본 보존 원칙: 리밸런스 전후 총자본(unallocated + 모든 balance + 포지션)이
+        반드시 동일해야 한다. 포지션 보유 슬롯은 재배분에서 제외하고,
+        유동 자본만 가중치 비례로 재분배한다.
         """
         if not self._slots:
             return
 
-        # 전체 배분 가능 자본 (포지션 보유 슬롯은 제외)
-        total = self._unallocated_krw
-        held_slots = []
-        for slot in self._slots.values():
+        # ── 1단계: 유동 자본 수거 (포지션 보유 슬롯 제외) ──
+        free_pool = self._unallocated_krw
+        free_coins = []
+        for coin, slot in self._slots.items():
             if slot.trader._position is not None:
-                # ★ 포지션 보유 슬롯: 재배분에서 제외 (잔액 보호)
-                held_slots.append(slot)
+                # 포지션 보유: balance + invested를 그대로 유지
+                slot.allocated_krw = (slot.trader._balance_krw
+                                      + slot.trader._position.invested_krw)
             else:
-                total += slot.trader._balance_krw
-        self._unallocated_krw = 0.0
+                free_pool += slot.trader._balance_krw
+                free_coins.append(coin)
 
-        # ★ 유동적 코인 수: 활성 코인에 전액 배분, 최소 금액만 예비
-        active_count = len(self._slots)
-        # 급등 감지 즉시 투입용 예비금 (코인 1개 분량 또는 미배분 잔액)
+        if not free_coins:
+            # 모든 슬롯이 포지션 보유 → 배분할 게 없음
+            self._unallocated_krw = free_pool
+            return
+
+        # ── 2단계: 예비금 분리 ──
         min_reserve = config.MIN_COIN_ALLOCATION_KRW
-        reserve = min(min_reserve, total * 0.1)  # 최대 10%만 예비
-        allocatable = total - reserve
+        reserve = min(min_reserve, free_pool * 0.1)
+        allocatable = free_pool - reserve
         if allocatable < 0:
-            allocatable = total
+            allocatable = free_pool
             reserve = 0
         self._unallocated_krw = reserve
 
-        # 가중치 합 계산
-        weight_sum = sum(s.allocation_weight for s in self._slots.values())
+        # ── 3단계: 유동 슬롯만 대상으로 가중치 비례 배분 ──
+        weight_sum = sum(self._slots[c].allocation_weight for c in free_coins)
         if weight_sum <= 0:
-            weight_sum = active_count
+            weight_sum = len(free_coins)
 
         if self._verbose:
-            print(f"  [배분] 총 {total:,.0f}원 → "
-                  f"활성 {allocatable:,.0f}원 ({active_count}코인) + "
-                  f"예비 {reserve:,.0f}원 (급등 투입용)")
+            print(f"  [배분] 유동 {free_pool:,.0f}원 → "
+                  f"{len(free_coins)}코인 {allocatable:,.0f}원 + "
+                  f"예비 {reserve:,.0f}원")
 
-        # 가중치 비례 재배분 — ★ 포지션 보유 시 잔액 보호
-        for coin, slot in self._slots.items():
+        distributed = 0.0
+        for coin in free_coins:
+            slot = self._slots[coin]
             new_alloc = allocatable * (slot.allocation_weight / weight_sum)
             old_balance = slot.trader._balance_krw
+            slot.trader._balance_krw = new_alloc
+            slot.allocated_krw = new_alloc
+            distributed += new_alloc
+            if self._verbose:
+                diff = new_alloc - old_balance
+                print(f"  [{coin}] {old_balance:,.0f} → "
+                      f"{new_alloc:,.0f}원 (×{slot.allocation_weight:.2f}, "
+                      f"{diff:+,.0f}원)")
 
-            if slot.trader._position is not None:
-                # ★ 포지션 보유 중: balance를 건드리지 않음
-                # balance는 매수 시 차감, 매도 시 복원 → 실거래 기록 보존
-                slot.allocated_krw = old_balance + slot.trader._position.invested_krw
-                if self._verbose:
-                    print(f"  [{coin}] {old_balance:,.0f}원 유지 "
-                          f"(포지션 보유 {slot.trader._position.invested_krw:,.0f}원)")
-            else:
-                # 포지션 없음: 새 배분금으로 설정
-                slot.trader._balance_krw = new_alloc
-                slot.allocated_krw = new_alloc
-                if self._verbose:
-                    diff = new_alloc - old_balance
-                    print(f"  [{coin}] {old_balance:,.0f} → "
-                          f"{new_alloc:,.0f}원 (×{slot.allocation_weight:.2f}, "
-                          f"{diff:+,.0f}원)")
+        # ★ 자본 보존 검증: 배분 후 총합이 free_pool과 일치하는지 확인
+        total_after = reserve + distributed
+        drift = free_pool - total_after
+        if abs(drift) > 100:
+            # 부동소수점 오차가 아닌 실제 누수 → 예비금에 보정
+            self._unallocated_krw += drift
+            logger.warning(
+                f"[리밸런스] 자본 보정: {drift:+,.0f}원 "
+                f"(pool={free_pool:,.0f} vs distributed={total_after:,.0f})"
+            )
+        self._audit_capital("리밸런스 후")
+
+    def _audit_capital(self, label: str = "") -> None:
+        """자본 무결성 검증 — 총자본이 초기자본 ±거래손익과 일치하는지 확인."""
+        # 메인 슬롯 자본
+        total = self._unallocated_krw
+        for slot in self._slots.values():
+            total += slot.trader._balance_krw
+            if slot.trader._position:
+                total += slot.trader._position.invested_krw
+        # 탐색 슬롯 자본
+        if self._exploration:
+            for slot in self._exploration._slots.values():
+                total += slot.trader._balance_krw
+                if slot.trader._position:
+                    total += slot.trader._position.invested_krw
+        trades = self.all_trades()
+        trade_pnl = sum(t.pnl_krw for t in trades)
+        expected = self._initial_capital + trade_pnl
+        drift = total - expected
+        if abs(drift) > 10000:  # 1만원 이상 오차
+            logger.warning(
+                f"[자본감사{' '+label if label else ''}] "
+                f"추적={total:,.0f} 기대={expected:,.0f} "
+                f"오차={drift:+,.0f}원"
+            )
 
     # ── 코인 관리 ─────────────────────────────────────────────
 
@@ -1198,6 +1472,10 @@ class PaperPortfolioManager:
             f"{alert.reason} @ {alert.current_price:,.0f}"
         )
 
+        # ★ 급등 전용 슬롯에 즉시 진입 시도
+        if self._surge_slots:
+            self._surge_slots.on_surge(coin, alert.phase, alert.current_price)
+
         with self._slot_lock:
             slot = self._slots.get(coin)
 
@@ -1692,18 +1970,65 @@ class PaperPortfolioManager:
     # ── KPI 집계 ──────────────────────────────────────────────
 
     def portfolio_total_value(self) -> float:
-        """전체 포트폴리오 가치 (미배분 + 각 트레이더 잔고 + 포지션 현재가)."""
+        """전체 포트폴리오 가치 (메인 + 탐색 슬롯 전체 합산).
+
+        ★ 이중 카운팅 방지: 결과가 초기자본의 2배를 넘으면
+        비정상 상태로 간주하고 초기자본으로 폴백한다.
+        """
+        # 메인 슬롯: 미배분 + 각 트레이더 잔고 + 포지션 현재가
         total = self._unallocated_krw
         for slot in self._slots.values():
             total += slot.trader._balance_krw
             if slot.trader._position:
                 pos = slot.trader._position
-                # ★ 현재 시장가로 포지션 가치 계산 (진입가 아님)
                 current_price = getattr(slot.trader, "_last_price", 0)
                 if current_price and current_price > 0:
                     total += pos.quantity * current_price
                 else:
-                    total += pos.invested_krw  # 시장가 없으면 투자금으로 폴백
+                    total += pos.invested_krw
+        # ★ 급등 슬롯 자본 합산
+        if self._surge_slots:
+            # 미배분 급등 자본
+            active_surge = sum(
+                s.trader._balance_krw + (
+                    s.trader._position.invested_krw if s.trader._position else 0
+                )
+                for s in self._surge_slots._slots.values()
+            )
+            unused_surge = self._surge_capital - active_surge
+            if unused_surge > 0:
+                total += unused_surge
+            for slot in self._surge_slots._slots.values():
+                total += slot.trader._balance_krw
+                if slot.trader._position:
+                    pos = slot.trader._position
+                    cp = getattr(slot.trader, "_last_price", 0)
+                    if cp and cp > 0:
+                        total += pos.quantity * cp
+                    else:
+                        total += pos.invested_krw
+
+        # ★ 탐색 슬롯 자본 합산 (미배분 + 슬롯 잔고 + 포지션)
+        if self._exploration:
+            total += self._exploration._unallocated_krw
+            for slot in self._exploration._slots.values():
+                total += slot.trader._balance_krw
+                if slot.trader._position:
+                    pos = slot.trader._position
+                    cp = getattr(slot.trader, "_last_price", 0)
+                    if cp and cp > 0:
+                        total += pos.quantity * cp
+                    else:
+                        total += pos.invested_krw
+
+        # ★ 이중 카운팅 안전장치: 초기자본의 2배 초과 시 비정상
+        if total > self._initial_capital * 2:
+            logger.warning(
+                f"[자본감사] 이중 카운팅 의심: "
+                f"{total:,.0f} > {self._initial_capital * 2:,.0f} "
+                f"→ 초기자본으로 폴백"
+            )
+            return self._initial_capital
         return total
 
     def all_trades(self) -> List[PaperTrade]:
@@ -1797,6 +2122,27 @@ class PaperPortfolioManager:
                     print(f"    {emoji} {s['coin']:>6} | {s['phase']:<13} | "
                           f"{s['price_change']} | 볼륨 {s['volume_ratio']}")
 
+        # ★ 탐색 슬롯 보고서 (메인과 완전 분리)
+        if self._exploration and self._exploration._slots:
+            exp = self._exploration
+            exp_trades = sum(s.stats.trade_count for s in exp._slots.values())
+            exp_wins = sum(s.stats.wins for s in exp._slots.values())
+            exp_wr = (exp_wins / exp_trades * 100) if exp_trades > 0 else 0
+            exp_pnl = sum(s.stats.total_pnl_krw for s in exp._slots.values())
+            print(f"  {'═' * 58}")
+            print(f"  AI 탐색 슬롯 | {len(exp._slots)}개 활성 | "
+                  f"거래 {exp_trades}건 | 승률 {exp_wr:.0f}% | "
+                  f"PnL {exp_pnl:+,.0f}원")
+            print(f"  승격: {exp._promoted_count} | "
+                  f"폐기: {exp._discarded_count} | "
+                  f"미배분: {exp._unallocated_krw:,.0f}원")
+            self._print_exploration_slots(exp)
+            print(f"  {'═' * 58}")
+
+        # ★ 급등 전용 슬롯 보고서 (완전 분리)
+        if self._surge_slots:
+            self._print_surge_report()
+
         # 시장 인텔리전스 요약
         if self._latest_prediction:
             pred = self._latest_prediction
@@ -1806,6 +2152,87 @@ class PaperPortfolioManager:
             if trend != "INSUFFICIENT_DATA":
                 print(f"    추세: {trend}")
         print(f"{'─' * 64}")
+
+    def _print_exploration_slots(self, exp) -> None:
+        """탐색 슬롯 상세 출력 (타입별 그룹)."""
+        from collections import defaultdict
+        by_type = defaultdict(list)
+        for slot in exp._slots.values():
+            by_type[slot.variant.variant_type].append(slot)
+
+        type_names = {
+            "PARAM_MUTATION": "파라미터 변형",
+            "STRATEGY_COMBO": "전략 조합",
+            "NOVEL_FILTER": "신규 필터",
+            "REGIME_OVERRIDE": "레짐 분기",
+            "TIME_RULE": "시간대 제한",
+        }
+        for vtype, slots in sorted(by_type.items()):
+            name = type_names.get(vtype, vtype)
+            print(f"    [{name}] ({len(slots)}개)")
+            for s in slots:
+                tc = s.stats.trade_count
+                wr = f"{s.stats.win_rate:.0f}%" if tc > 0 else "-"
+                pnl = f"{s.stats.total_pnl_krw:+,.0f}" if tc > 0 else "-"
+                status = "READY" if tc < 20 else "EVAL"
+                print(f"      {s.variant.variant_id} | "
+                      f"{s.coin:>5} | {s.variant.description[:30]:<30} | "
+                      f"{tc:>2}건 {wr:>4} {pnl:>10} | {status}")
+
+    def _print_surge_report(self) -> None:
+        """급등 전용 슬롯 보고서 출력."""
+        surge = self._surge_slots
+        status = surge.get_status()
+        active = status.get("active_slots", 0)
+        total_trades = status.get("trade_count", 0)
+        total_pnl = status.get("total_pnl", 0)
+        stats = status.get("learning_stats", {})
+        params = status.get("optimal_params", {})
+
+        print(f"  {'▰' * 58}")
+        print(f"  🚀 급등 전용 슬롯 | {active}개 활성 / "
+              f"{status.get('max_slots', 10)}개 | "
+              f"자본: {status.get('capital', 0) / 1e8:.0f}억원")
+
+        if total_trades > 0:
+            wr = stats.get("win_rate", 0)
+            avg_pnl = stats.get("avg_pnl_pct", 0)
+            avg_hold = stats.get("avg_hold_sec", 0)
+            print(f"  거래: {total_trades}건 | 승률: {wr:.0f}% | "
+                  f"PnL: {total_pnl:+,.0f}원 | "
+                  f"평균: {avg_pnl:+.2f}% ({avg_hold:.0f}초)")
+
+            # 페이즈별 성과
+            by_phase = stats.get("by_phase", {})
+            for phase, ps in by_phase.items():
+                print(f"    {phase}: {ps['count']}건 "
+                      f"WR={ps['win_rate']:.0f}% "
+                      f"avg={ps['avg_pnl']:+.2f}%")
+
+            # 급등 빈도 TOP 코인
+            top_coins = stats.get("top_coins", [])
+            if top_coins:
+                coins_str = ", ".join(
+                    f"{c['coin']}({c['count']})" for c in top_coins[:5]
+                )
+                print(f"    급등 빈도 TOP: {coins_str}")
+        else:
+            print(f"  대기 중 — 급등 감지 시 자동 진입")
+
+        # 학습된 최적 파라미터
+        print(f"  학습 파라미터: 트레일링 {params.get('trailing_pct', 2.0)}% | "
+              f"최대보유 {params.get('max_hold_sec', 1800)}초")
+
+        # 현재 보유 중인 급등 포지션
+        slots = status.get("slots", [])
+        if slots:
+            print(f"  ── 보유 중 ──")
+            for s in slots:
+                print(f"    🚀 {s['coin']:>6} | {s['phase']:<13} | "
+                      f"진입 {s['entry_time'][11:]} | "
+                      f"{s['allocated_krw']:,.0f}원")
+
+        print(f"  {'▰' * 58}")
 
 
 # ── CLI 진입점 ──────────────────────────────────────────────

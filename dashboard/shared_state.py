@@ -647,7 +647,31 @@ def _build_paper_portfolio_state(manager) -> dict:
         "trades": trades,
         "equity_curve": equity_curve,
         "insight_actions": insight_actions,
+        "exploration": _collect_exploration_status(manager),
+        "surge_slots": _collect_surge_status(manager),
     }
+
+
+def _collect_surge_status(manager) -> dict:
+    """급등 슬롯 상태 수집."""
+    try:
+        surge = getattr(manager, "_surge_slots", None)
+        if surge is None:
+            return {"enabled": False}
+        return surge.get_status()
+    except Exception:
+        return {"enabled": False}
+
+
+def _collect_exploration_status(manager) -> dict:
+    """탐색 슬롯 상태 수집."""
+    try:
+        exp = getattr(manager, "_exploration", None)
+        if exp is None:
+            return {"enabled": False}
+        return exp.get_status()
+    except Exception:
+        return {"enabled": False}
 
 
 def _snapshot_config() -> dict:

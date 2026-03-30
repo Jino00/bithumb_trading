@@ -157,6 +157,16 @@ class AdaptivePaperTrader:
         self._last_adaptation: Optional[datetime] = None
         self._adaptation_count: int = 0
 
+        # ── 탐색 슬롯 훅 (ExplorationManager에서 주입) ──────────
+        self._exploration_variant_id: Optional[str] = None  # EXP:xxx
+        self._variant_filter_fn = None       # 선택적 진입 필터
+        self._variant_param_overrides: Dict = {}  # 파라미터 오버라이드
+        self._entry_strategy_override: str = ""   # 진입 전략 오버라이드
+        self._exit_strategy_override: str = ""    # 청산 전략 오버라이드
+        self._variant_regime_rules: Dict = {}     # 레짐별 파라미터 분기
+        self._active_hours: Optional[set] = None  # 허용 거래 시간대
+        self._suppress_hold_log: bool = False     # True면 HOLD 로그 숨김 (탐색용)
+
         # ── 고급 통계 모듈 ──────────────────────────────────────
         self._bayesian = BayesianStrategyTracker(
             prior_alpha=config.BAYESIAN_PRIOR_ALPHA,
@@ -366,6 +376,11 @@ class AdaptivePaperTrader:
         # 5. 포지션 없으면: 신호 생성 → 매수
         # ★ 전략 NONE이어도 워터폴 실행 (모든 코인에 기회 부여)
         if self._position is None:
+            # ★ 탐색 슬롯: 시간대 제한 확인
+            if self._active_hours is not None:
+                if datetime.now().hour not in self._active_hours:
+                    return
+
             # ★ 인사이트 학습 승률로 워터폴 우선순위 동적 재정렬
             _scores = self._unified_engine.get_unified_actions().strategy_scores
             ctx = self._strategy.generate_signal_with_context(
@@ -374,6 +389,16 @@ class AdaptivePaperTrader:
             self._print_cycle_status(now, price, ctx)
 
             if ctx.signal == "BUY":
+                # ★ 탐색 슬롯: 변형 필터 확인
+                if self._variant_filter_fn is not None:
+                    try:
+                        if not self._variant_filter_fn(df, len(df) - 1):
+                            if self._verbose:
+                                print(f"  → 탐색 필터 거부")
+                            return
+                    except Exception:
+                        pass  # 필터 오류 시 통과
+
                 # 5a-0. ★ FAKE_SIGNAL 필터 (교훈: 진입 즉시 역행 방지)
                 fake_blocked = self._check_fake_signal_filter(df, price)
                 if fake_blocked and not self._surge_boost:
@@ -485,8 +510,14 @@ class AdaptivePaperTrader:
                 if not continue_hold:
                     price = self._client.get_current_price(self._coin)
                     if price:
-                        print(f"        전략 전환 — 기존 포지션 청산")
-                        self._execute_sell(price, "STRATEGY_SWITCH")
+                        # ★ 손실 중이면 전략 전환 청산 보류 (SL/TP에 맡김)
+                        pnl = (price - self._position.entry_price) / self._position.entry_price * 100
+                        if pnl < 0:
+                            if self._verbose:
+                                print(f"        전략 전환 but 손실 중 ({pnl:+.2f}%) → 청산 보류")
+                        else:
+                            print(f"        전략 전환 — 수익 확정 ({pnl:+.2f}%)")
+                            self._execute_sell(price, "STRATEGY_SWITCH")
         else:
             print(f"        전략 유지: {result.best.name} "
                   f"(점수: {result.best.score:.1f})")
@@ -498,10 +529,33 @@ class AdaptivePaperTrader:
         if self._balance_krw <= 0:
             return
 
+        # ★ 같은 코인 재진입 쿨다운 (반복 손절 방지)
+        cooldown_min = getattr(config, "COIN_COOLDOWN_MINUTES", 0)
+        if cooldown_min > 0 and self._trades:
+            last_exit = self._trades[-1]
+            try:
+                exit_time = datetime.strptime(
+                    last_exit.exit_time, "%Y-%m-%d %H:%M"
+                )
+                elapsed = (datetime.now() - exit_time).total_seconds() / 60
+                if elapsed < cooldown_min:
+                    return  # 쿨다운 중 — 진입 보류
+            except Exception:
+                pass
+
         now = datetime.now().strftime("%H:%M")
 
         # Kelly 포지션 사이징: 과거 거래 기반 최적 투입 비율
         invest_krw = self._calc_kelly_position()
+
+        # ★ 단일 포지션 캡 (대형 손실 방지)
+        vol_tier = self._volatility_tier
+        if vol_tier == "EXTREME":
+            pos_cap = getattr(config, "POSITION_CAP_EXTREME_KRW", 30_000_000)
+        else:
+            pos_cap = getattr(config, "POSITION_CAP_KRW", 50_000_000)
+        if pos_cap > 0:
+            invest_krw = min(invest_krw, pos_cap)
 
         # 학습 기반 포지션 사이징 조정 (승률 낮으면 축소, 높으면 유지/확대)
         if self._position_multiplier != 1.0:
@@ -564,10 +618,13 @@ class AdaptivePaperTrader:
             sl_pct = round(sl_pct * config.VOLATILE_HOT_SL_MULT, 2)
             tp_pct = round(tp_pct * config.VOLATILE_HOT_TP_MULT, 2)
 
-        # ★ 티어별 SL 최소값 강제 (#35: 0.14% SL → 노이즈 즉시 청산 방지)
+        # ★ 티어별 SL 범위 강제 (최소 + 최대)
         tier_min_sl = {"EXTREME": 2.0, "HOT": 1.5, "NORMAL": 0.8}
+        tier_max_sl = {"EXTREME": 5.0, "HOT": 4.0, "NORMAL": 3.0}
         sl_pct = max(sl_pct, tier_min_sl.get(vol_tier, 0.8))
+        sl_pct = min(sl_pct, tier_max_sl.get(vol_tier, 3.0))  # ★ SL 상한 (GOAT -12.5% 방지)
         tp_pct = max(tp_pct, sl_pct * 1.5)  # TP는 최소 SL의 1.5배
+        tp_pct = min(tp_pct, 10.0)  # TP도 10% 상한
 
         self._position = PaperPosition(
             coin=self._coin,
@@ -885,40 +942,45 @@ class AdaptivePaperTrader:
     def _check_time_based_exit(
         self, price: float, pnl_pct: float, hold_min: int
     ) -> None:
-        """시간 기반 유연 청산 — 보유 시간이 길수록 TP를 낮춰 수익 확정."""
+        """시간 기반 청산 — 수수료(0.25%) 이상 수익만 확정, 손실은 조기 차단.
+
+        ★ 핵심 원칙: TIME_TP 최소 수익 > 왕복 수수료 (0.25%)
+        이전 문제: +0.05~0.15% 익절 → 수수료 포함 시 오히려 손실
+        개선: 최소 +0.5% 이상에서만 시간 청산, RR 비대칭 해소
+        """
         if self._position is None:
             return
 
-        # 보유 시간별 최소 수익으로 청산 (거래 회전율 향상)
+        # 수수료 커버 최소 수익 (빗썸 왕복 ~0.25%)
+        min_profitable = 0.35
+
+        # 보유 시간별 수익 확정 (이전: 1시간 +1.0% → 포지션이 4시간 묶임)
         time_tp_rules = [
-            (120, 0.05),  # 2시간 이상 → 수익이면 거의 무조건 청산
-            (60, 0.15),   # 1시간 이상 → +0.15% 이상이면 청산
-            (30, 0.3),    # 30분 이상 → +0.3% 이상이면 청산
-            (15, 0.5),    # 15분 이상 → +0.5% 이상이면 청산
+            (60, min_profitable),   # 1시간 이상 → +0.35% 이상이면 확정
+            (30, 0.5),              # 30분 이상 → +0.5% 이상이면 확정
+            (15, 1.0),              # 15분 이상 → +1.0% 이상이면 확정
         ]
 
         for min_hold, min_tp in time_tp_rules:
             if hold_min >= min_hold and pnl_pct >= min_tp:
                 if self._verbose:
-                    print(f"  ⏰ 시간 청산: {hold_min}분 보유 + "
-                          f"PnL {pnl_pct:+.2f}% ≥ {min_tp}% → 확정")
+                    print(f"  [TIME_TP] {hold_min}분 + "
+                          f"PnL {pnl_pct:+.2f}% >= {min_tp}%")
                 self._execute_sell(price, "TIME_TP")
                 return
 
-        # ★ 30분 초과 + 손실: 즉시 청산 (승리 22분 vs 패배 31분 데이터)
+        # 보유 시간 초과 + 손실: 기회비용 방지
         max_hold = config.MAX_HOLD_MINUTES
-        if hold_min >= max_hold and pnl_pct < 0:
+        if hold_min >= max_hold and pnl_pct < -0.3:
             if self._verbose:
-                print(f"  ⏰ {max_hold}분 초과 손절: {hold_min}분 + "
-                      f"PnL {pnl_pct:+.2f}% → 즉시 청산")
+                print(f"  [TIME_SL] {hold_min}분 + PnL {pnl_pct:+.2f}%")
             self._execute_sell(price, "TIME_SL")
             return
 
-        # 장기 보유 손절: 2시간 이상 보유 + 손실 중 → 기회비용 방지
+        # 2시간 이상 + 손실 → 기회비용 방지
         if hold_min >= 120 and pnl_pct < 0:
             if self._verbose:
-                print(f"  ⏰ 장기 보유 손절: {hold_min}분 + "
-                      f"PnL {pnl_pct:+.2f}% → 기회비용 방지")
+                print(f"  [TIME_SL] 장기 {hold_min}분 + PnL {pnl_pct:+.2f}%")
             self._execute_sell(price, "TIME_SL")
 
     def _check_indicator_exit(
@@ -953,14 +1015,16 @@ class AdaptivePaperTrader:
             self._execute_sell(price, "RSI_DROP")
             return
 
-        # 변동성 급등 (ATR이 평균의 2배) + 손실 중 → 리스크 회피
+        # 변동성 급등 (ATR이 평균의 3배) + 유의미한 손실 → 리스크 회피
+        # ★ 이전: ATR 2x + -0.3% → 과민 반응으로 XTER -474만원 손실 유발
+        # ★ 개선: ATR 3x + -1.5% → 진짜 위험할 때만 청산
         atr = ta_lib.volatility.AverageTrueRange(
             df["high"].astype(float), df["low"].astype(float), c, window=14
         ).average_true_range()
         if atr is not None and len(atr) > 20:
             current_atr = float(atr.iloc[-1])
             avg_atr = float(atr.iloc[-20:].mean())
-            if avg_atr > 0 and current_atr > avg_atr * 2.0 and pnl_pct < -0.3:
+            if avg_atr > 0 and current_atr > avg_atr * 3.0 and pnl_pct < -1.5:
                 if self._verbose:
                     print(f"  📊 변동성 급등 청산: ATR {current_atr/avg_atr:.1f}x + "
                           f"PnL {pnl_pct:+.2f}% → 리스크 회피")
@@ -1175,6 +1239,9 @@ class AdaptivePaperTrader:
         """사이클 상태 출력."""
         if ctx.signal == "BUY":
             return  # BUY는 _execute_buy에서 출력
+        # ★ 탐색 슬롯은 HOLD 로그 숨김 (BUY/EXIT만 출력)
+        if getattr(self, "_suppress_hold_log", False):
+            return
         regime = ctx.regime
         reason = ctx.reason
         if len(reason) > 40:

@@ -25,8 +25,8 @@ RSI_CANDLE_INTERVAL = "1h"  # 캔들 단위
 # ── 백테스트 설정 ─────────────────────────────────────────
 BACKTEST_DAYS = 365              # 1년 데이터
 MIN_WIN_RATE = 55.0              # 전략 게이트 최소 승률 %
-MIN_BACKTEST_TRADES = 10         # 전략 게이트 최소 샘플 수
-MIN_PROFIT_FACTOR = 1.2          # 전략 게이트 최소 Profit Factor
+MIN_BACKTEST_TRADES = 30         # 전략 게이트 최소 샘플 수 (10→30, 통계적 유의성)
+MIN_PROFIT_FACTOR = 1.3          # 전략 게이트 최소 Profit Factor (1.2→1.3, 수수료 커버 마진)
 LIVE_WIN_RATE_THRESHOLD = 65.0   # 실전 승률 비활성화 기준 %
 
 # ── 실전 모니터링 설정 ──────────────────────────────────────
@@ -89,8 +89,8 @@ ADAPTIVE_TRADE_TRIGGER = 1               # ★ 거래 1건마다 즉시 학습 (
 ADAPTIVE_MIN_TRADES = 3                  # ★ 분석 최소 거래 수 (5→3, 더 빠른 학습 시작)
 ADAPTIVE_POSITION_MIN_MULT = 0.3         # 포지션 최소 배율
 ADAPTIVE_POSITION_MAX_MULT = 2.0         # ★ 포지션 최대 배율 (1.5→2.0, 확신 시 공격적)
-ADAPTIVE_BAD_HOUR_WIN_RATE = 35.0        # ★ 시간대 차단 기준 (40→35%, 과도한 차단 방지)
-ADAPTIVE_BAD_HOUR_MIN_TRADES = 8         # ★ 시간대 차단 최소 거래 수 (3→8, 통계적 신뢰)
+ADAPTIVE_BAD_HOUR_WIN_RATE = 0.0         # ★ 시간대 차단 비활성화 (데이터 부족 — 이른 판단 방지)
+ADAPTIVE_BAD_HOUR_MIN_TRADES = 9999      # ★ 사실상 차단 안 함
 ADAPTIVE_DOWNTREND_WIN_RATE = 35.0       # ★ 하락추세 차단 기준 (45→35%, 바운스 기회 보존)
 ADAPTIVE_DOWNTREND_SCALE = 0.5           # ★ 하락추세 포지션 축소 배율 (차단→축소)
 ADAPTIVE_HIGH_VOL_WIN_RATE = 40.0        # 고변동성 포지션 축소 기준 승률 %
@@ -111,8 +111,8 @@ INSIGHT_TIER_SCALE_WR = 25.0                   # 티어별 포지션 축소 승�
 INSIGHT_TIER_SCALE_MIN_TRADES = 10             # 축소 판단 최소 거래 수 (3→10, 과적합 방지)
 INSIGHT_SL_EXIT_RATIO_THRESHOLD = 0.5          # SL 청산 비율 > 이 값이면 SL 확대
 INSIGHT_SL_WIDEN_STEP = 0.3                    # SL 확대 단위 %
-INSIGHT_HOUR_BLOCK_WR = 25.0                   # 시간대 차단 승률 임계치 %
-INSIGHT_HOUR_BLOCK_MIN_TRADES = 10             # 시간대 차단 최소 거래 수 (3→10, 과적합 방지)
+INSIGHT_HOUR_BLOCK_WR = 0.0                    # ★ 시간대 차단 비활성화
+INSIGHT_HOUR_BLOCK_MIN_TRADES = 9999           # ★ 사실상 차단 안 함
 INSIGHT_CONSEC_LOSS_COOLDOWN = 5               # 연속 N패 시 쿨다운 (거래 일시 중단)
 
 # ── 통합 인사이트 엔진 (외부 리서치) ─────────────────────
@@ -126,7 +126,7 @@ DAILY_RESEARCH_MAX_SOURCES = 5                 # 일일 리서치 최대 소스 
 # ── NotebookLM 인사이트 기반 필터 ────────────────────────
 SCALP_EMA_TREND_FILTER = 200                   # 200 EMA 추세 필터 (위에서만 롱 진입)
 SCALP_DOJI_BODY_RATIO = 0.1                    # 도지 캔들 판정 (몸통/전체 < 10%)
-MANUAL_BLOCKED_HOURS = {13, 14, 15}            # 수동 차단 시간대 (13~15시 변동성 최저)
+MANUAL_BLOCKED_HOURS = set()                    # ★ 수동 차단 없음 (모든 시간대 허용)
 
 # ── 적응 효과성 추적 ─────────────────────────────────────
 EFFECTIVENESS_MIN_TRADES_AFTER = 10            # 효과 판정 최소 거래 수
@@ -137,8 +137,8 @@ EFFECTIVENESS_BAD_DELTA = -5.0                 # 비효과적: 승률 -5%p 이�
 ANALYSIS_RECENCY_MIN_WEIGHT = 0.3              # 가장 오래된 거래 가중치
 
 # ── 멀티코인 포트폴리오 설정 ──────────────────────────────
-MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", "100"))            # 상한선 (30→100, 학습용 대량 거래)
-MIN_ACTIVATION_SCORE = float(os.getenv("MIN_ACTIVATION_SCORE", "0.0"))  # ★ 전략 평가 점수 0+ (5→0, 모든 전략 허용)
+MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", "70"))             # 메인 70 + 탐색 30 = 100 슬롯
+MIN_ACTIVATION_SCORE = float(os.getenv("MIN_ACTIVATION_SCORE", "3.0"))  # ★ 전략 평가 최소 점수 (0→3, 저품질 코인 필터)
 MIN_COIN_ALLOCATION_KRW = int(os.getenv("MIN_COIN_ALLOCATION", "500000"))  # ★ 코인당 최소 50만원
 PORTFOLIO_MDD_PCT = float(os.getenv("PORTFOLIO_MDD_PCT", "25.0")) # 포트폴리오 MDD 한도 %
 PER_COIN_ALLOCATION_PCT = 100.0 / MAX_POSITIONS                   # 코인당 자본 비율 % (자동 계산, 참고용)
@@ -159,8 +159,8 @@ ALLOC_CONFIDENCE_TRADES = 20     # 신뢰도 기준 거래 수
 FIXED_SLOT_WEIGHTS = {"BTC": 2.5, "SOL": 1.5, "ETH": 1.0}  # 비중 가중치
 
 # ── 스크리너 설정 ────────────────────────────────────────────
-SCREENER_MIN_VOLUME_KRW = float(os.getenv("SCREENER_MIN_VOLUME_KRW", "1000000000"))  # 10억원
-SCREENER_MIN_RANGE_PCT = float(os.getenv("SCREENER_MIN_RANGE_PCT", "2.0"))
+SCREENER_MIN_VOLUME_KRW = float(os.getenv("SCREENER_MIN_VOLUME_KRW", "100000000"))  # 1억원 (10억→1억, 70슬롯 확보)
+SCREENER_MIN_RANGE_PCT = float(os.getenv("SCREENER_MIN_RANGE_PCT", "0.5"))          # 0.5% (2%→0.5%, 더 많은 코인)
 SCREENER_MIN_PRICE_KRW = 10                     # ★ 최소 가격 (10원 미만은 슬리피지 과다)
 
 # ── 영구 블랙리스트 (성과 데이터 기반) ──────────────────────────
@@ -179,7 +179,7 @@ COIN_PERF_BLOCK_TTL_HOURS = 6                     # 성과 부진 차단 TTL (�
 CONSEC_LOSS_SCALES = {2: 0.7, 3: 0.5, 4: 0.3}    # 연패 수 → 포지션 배율
 
 # ── 보유 시간 자동 청산 ──────────────────────────────────────
-MAX_HOLD_MINUTES = 30                             # 이 시간 초과 + 손실 → TIME_SL
+MAX_HOLD_MINUTES = 60                             # 1시간 초과 + 손실 → TIME_SL (240→60, 자본 회전율 개선)
 
 SCREENER_HOT_RANGE_PCT = 15.0                   # ★ 변동폭 15%+ → HOT (실시간 대응 모드)
 SCREENER_EXTREME_RANGE_PCT = 40.0               # ★ 변동폭 40%+ → EXTREME (초고속 대응 모드)
@@ -216,7 +216,7 @@ VOLATILE_TRAILING_STOP_PCT = VOLATILE_NORMAL_TRAIL_PCT
 VOLATILE_TRAILING_ACTIVATE_PCT = VOLATILE_NORMAL_ACTIVATE_PCT
 VOLATILE_SL_TIGHTEN_MULT = VOLATILE_NORMAL_SL_MULT
 VOLATILE_TP_STRETCH_MULT = VOLATILE_NORMAL_TP_MULT
-SCREENER_TOP_VOLUME_N = int(os.getenv("SCREENER_TOP_VOLUME_N", "30"))
+SCREENER_TOP_VOLUME_N = int(os.getenv("SCREENER_TOP_VOLUME_N", "100"))  # 상위 100개 (30→100)
 
 # ── DB 경로 ───────────────────────────────────────────────
 DB_PATH = os.path.join(os.path.dirname(__file__), "logger", "trades.db")
@@ -237,8 +237,8 @@ SCALP_RSI_OVERBOUGHT_EXIT = 68.0               # 과매수 청산 (72→68, 빠�
 SCALP_EMA_SHORT = 15                           # 단기 EMA (20→15, 빠른 반응)
 SCALP_EMA_LONG = 50                            # 장기 EMA
 SCALP_ATR_PERIOD = 14                          # ATR 기간
-SCALP_ATR_SL_MULT = 1.5                        # SL 배수 (1.0→1.5, 넓은 SL=64% 승률 vs tight 20%)
-SCALP_ATR_TP_MULT = 0.8                        # TP 배수 (1.5→0.8, 작은 이익도 확정 → 회전율↑)
+SCALP_ATR_SL_MULT = 1.5                        # SL 배수 (넓은 SL=64% 승률 vs tight 20%)
+SCALP_ATR_TP_MULT = 2.0                        # TP 배수 (0.8→2.0, RR 최소 1.3 이상 확보 필수)
 SCALP_ATR_TRAIL_MULT = 0.8                     # 트레일링 (1.5→0.8, 빠른 이익 보존)
 SCALP_VOL_MIN_RATIO = 0.2                      # 거래량 비율 (0.4→0.2, 최대 완화)
 SCALP_COOLDOWN_BARS = 1                        # 쿨다운 (2→1, 즉시 재진입)
@@ -253,7 +253,7 @@ SCALP_VOL_RR_RATIO = 2.0                       # 손익비 (2.5→2.0, TP 적중
 # S3: 하이킨아시 — 2026-03-15 튜닝 (검증된 최고 전략, 진입 빈도↑)
 SCALP_HA_DOJI_BODY_RATIO = 0.06                # 도지 판정 (0.05→0.06, 약간 관대해져 진입↑)
 SCALP_HA_FLAT_WICK_TOL = 0.003                 # 바닥 허용 (0.002→0.003, 더 많은 반전 포착)
-SCALP_HA_RR_RATIO = 1.2                        # 손익비 (1.5→1.2, TP 도달률 16%→50% 목표)
+SCALP_HA_RR_RATIO = 2.0                        # 손익비 (1.2→2.0, RR 복원 — 낮은 RR이 -92% 핵심 원인)
 SCALP_HA_MIN_BEARISH_CANDLES = 1               # 최소 음봉 (2→1, 빠른 반전도 포착)
 SCALP_HA_WEAK_MIN_PCT = 0.8                    # HA_WEAK 최소 이익 (1.0→0.8, 비용커버 유지)
 SCALP_HA_MIN_ATR_PCT = 0.2                     # 최소 변동성 (0.3→0.2, 더 많은 기회)
@@ -261,7 +261,7 @@ SCALP_HA_MIN_ATR_PCT = 0.2                     # 최소 변동성 (0.3→0.2, �
 # S4: VWAP — 2026-03-15 튜닝 (VWAP 접근 기회 확대)
 SCALP_VWAP_PERIOD = 20                         # VWAP 기간 (24→20, 빠른 앵커)
 SCALP_VWAP_BAND_MULT = 1.8                     # 밴드 배수 (2.0→1.8, 밴드 좁혀 진입↑)
-SCALP_VWAP_RR_RATIO = 1.3                      # 손익비 (1.8→1.3, TP 도달률↑)
+SCALP_VWAP_RR_RATIO = 2.0                      # 손익비 (1.3→2.0, 비대칭 수익 구조 복원)
 SCALP_VWAP_PULLBACK_TOLERANCE = 0.005          # 근접 허용 (0.003→0.005, 더 관대한 VWAP 접근)
 
 # S5: BEAR 과매도 반등 — 2026-03-15 튜닝 (반등 기회 확대)
@@ -281,7 +281,7 @@ SCALP_BEAR_POSITION_SCALE = 0.5                # 포지션 축소 (유지)
 SCALP_SMMA_SHORT = 18                          # 단기 SMMA (21→18, 빠른 반응)
 SCALP_SMMA_MID = 50                            # 중기 SMMA (유지)
 SCALP_SMMA_LONG = 200                          # 장기 SMMA (유지)
-SCALP_SMMA_RR_RATIO = 1.3                      # 손익비 (1.8→1.3, TP 도달률↑)
+SCALP_SMMA_RR_RATIO = 2.0                      # 손익비 (1.3→2.0, PF 1.5+ 확보)
 SCALP_SMMA_MAX_HOLD = 15                       # 최대 보유 (20→15, 빠른 회전)
 SCALP_SMMA_TANGLE_TOL = 0.007                  # 꼬임 허용 (0.005→0.007, 더 많은 꼬임 감지)
 SCALP_SMMA_RETEST_TOL = 0.008                  # 리테스트 허용 (0.005→0.008, 더 관대한 리테스트)
@@ -313,6 +313,23 @@ EVOLUTION_OOS_RATIO = 0.6                      # OOS 점수 ≥ IS 점수 × 이
 EVOLUTION_DRIFT_THRESHOLD = 0.3                # 실전 vs 백테스트 괴리 임계값
 EVOLUTION_FEEDBACK_LOOKBACK_H = 168            # 피드백 분석 lookback (시간, 1주)
 
+# ── 탐색 슬롯 설정 (자가 진화 실험) ─────────────────────────
+# ── 급등 전용 슬롯 설정 ──────────────────────────────────────
+SURGE_SLOT_COUNT = 10                              # 급등 전용 슬롯 수
+SURGE_SLOT_CAPITAL_RATIO = 0.10                    # 총 자본 중 급등 비율 (10%)
+
+# ── 탐색 슬롯 설정 (자가 진화 실험) ─────────────────────────
+EXPLORATION_ENABLED = os.getenv("EXPLORATION_ENABLED", "true").lower() == "true"
+EXPLORATION_SLOT_COUNT = 30                    # 탐색 슬롯 수
+EXPLORATION_CAPITAL_RATIO = 0.20               # 총 자본 중 탐색 비율 (30→20%, 급등 10% 분리)
+EXPLORATION_CAPITAL_SCALE = 0.5                # 슬롯당 축소 배율 (실험이므로 50%)
+EXPLORATION_MIN_TRADES = 20                    # 승격/폐기 판단 최소 거래 수
+EXPLORATION_PROMOTE_WR = 50.0                  # 승격 기준 승률 %
+EXPLORATION_PROMOTE_PF = 1.3                   # 승격 기준 Profit Factor
+EXPLORATION_DISCARD_WR = 30.0                  # 폐기 기준 승률 %
+EXPLORATION_EVAL_INTERVAL_MIN = 30             # 평가 주기 (분)
+EXPLORATION_MAX_SAME_STRATEGY = 10             # 동일 기본 전략 최대 슬롯 수
+
 # ── 3단계 파이프라인 설정 ─────────────────────────────────
 FIXED_SLOTS = ["BTC", "ETH"]                      # ★ 수익 검증된 대형코인 고정 (BTC=S3 +7.85%, ETH=S4 +0.95%)
 BENCH_MAX_SIZE = 20                            # 대기석 최대 코인 수
@@ -336,10 +353,13 @@ INTEL_DAILY_REPORT_ENABLED = True                 # 일일 리포트 자동 저�
 
 # ── 고급 통계 모듈 설정 ──────────────────────────────────────
 # Kelly Criterion
-KELLY_MODE = "half"                               # "full", "half", "quarter"
+KELLY_MODE = "quarter"                            # "full"→"quarter" (손실 비대칭 방지)
 KELLY_MIN_PCT = 5.0                               # 최소 투입 비율 %
-KELLY_MAX_PCT = 50.0                              # 최대 투입 비율 %
+KELLY_MAX_PCT = 30.0                              # 최대 투입 30% (50→30, 단일 거래 리스크 제한)
 KELLY_MIN_TRADES = 10                             # Kelly 계산에 필요한 최소 거래 수
+POSITION_CAP_KRW = 50_000_000                     # 단일 포지션 최대 5천만원 (1억→5천만, GOAT -12.5% 교훈)
+POSITION_CAP_EXTREME_KRW = 30_000_000             # EXTREME 코인 최대 3천만원 (변동성 리스크 제한)
+COIN_COOLDOWN_MINUTES = 10                        # 같은 코인 재진입 쿨다운 (30→10분, 회전율 개선)
 
 # Monte Carlo
 MC_SIMULATIONS = 5000                             # 시뮬레이션 반복 횟수
