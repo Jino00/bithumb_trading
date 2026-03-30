@@ -265,13 +265,24 @@ class SurgeSlotManager:
         self._total_pnl = 0.0
 
     def on_surge(self, coin: str, phase: str, price: float) -> bool:
-        """급등 알림 수신 → 빈 슬롯에 즉시 진입."""
+        """급등 알림 수신 → 빈 슬롯에 즉시 진입.
+
+        ★ 학습 결과: IGNITION(65.6% +0.49%) > ACCELERATION(57.7% -0.55%)
+        ACCELERATION은 가격 변화 5%+ 일 때만 진입 (기준 강화)
+        """
         if phase == "CLIMAX":
-            return False  # CLIMAX는 절대 진입 금지
+            return False
         if coin in self._slots:
-            return False  # 이미 보유 중
+            return False
         if len(self._slots) >= self._max_slots:
-            return False  # 슬롯 풀
+            return False
+        # ★ 학습: ACCELERATION은 기준 강화 (손실이 더 큼)
+        stats = self._learner.get_stats()
+        by_phase = stats.get("by_phase", {})
+        acc = by_phase.get("ACCELERATION", {})
+        if phase == "ACCELERATION" and acc.get("count", 0) >= 5:
+            if acc.get("avg_pnl", 0) < 0:
+                return False  # ACCELERATION이 손실이면 진입 안 함
 
         # 학습된 최적 파라미터 적용
         params = self._learner.get_optimal_params()

@@ -322,11 +322,12 @@ SURGE_SLOT_CAPITAL_RATIO = 0.10                    # 총 자본 중 급등 비�
 EXPLORATION_ENABLED = os.getenv("EXPLORATION_ENABLED", "true").lower() == "true"
 EXPLORATION_SLOT_COUNT = 30                    # 탐색 슬롯 수
 EXPLORATION_CAPITAL_RATIO = 0.20               # 총 자본 중 탐색 비율 (30→20%, 급등 10% 분리)
-EXPLORATION_CAPITAL_SCALE = 0.5                # 슬롯당 축소 배율 (실험이므로 50%)
+EXPLORATION_CAPITAL_SCALE = 0.5                # 슬롯당 배율 유지 (의미 있는 실험 데이터 확보)
 EXPLORATION_MIN_TRADES = 20                    # 승격/폐기 판단 최소 거래 수
 EXPLORATION_PROMOTE_WR = 50.0                  # 승격 기준 승률 %
 EXPLORATION_PROMOTE_PF = 1.3                   # 승격 기준 Profit Factor
-EXPLORATION_DISCARD_WR = 30.0                  # 폐기 기준 승률 %
+EXPLORATION_DISCARD_WR = 35.0                  # 폐기 기준 승률 % (30→35, 빠른 폐기)
+EXPLORATION_MAX_LOSS_KRW = 1_000_000           # 변형당 최대 허용 손실 (100만원 초과 시 폐기)
 EXPLORATION_EVAL_INTERVAL_MIN = 30             # 평가 주기 (분)
 EXPLORATION_MAX_SAME_STRATEGY = 10             # 동일 기본 전략 최대 슬롯 수
 

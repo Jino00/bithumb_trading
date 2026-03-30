@@ -217,14 +217,24 @@ def generate_diverse_variants(
     n: int = config.EXPLORATION_SLOT_COUNT,
     type_distribution: Optional[Dict[str, int]] = None,
 ) -> List[ExplorationVariant]:
-    """다양한 타입의 변형 n개를 생성한다."""
+    """다양한 타입의 변형 n개를 생성한다.
+
+    ★ 학습 기반 분배: NOVEL_FILTER가 수익(+159만)이므로 절반 배정.
+    REGIME_OVERRIDE는 최악(-1,409만)이므로 2개만.
+    """
     if type_distribution is None:
-        per_type = max(1, n // len(_GENERATORS))
-        type_distribution = {t: per_type for t in _GENERATORS}
-        # 나머지를 첫 번째 타입에 추가
-        remainder = n - sum(type_distribution.values())
-        first_key = list(type_distribution.keys())[0]
-        type_distribution[first_key] += remainder
+        # 학습된 최적 분배 (탐색 성과 기반)
+        type_distribution = {
+            "NOVEL_FILTER": 12,      # 수익 유일 타입 → 절반
+            "PARAM_MUTATION": 6,     # 중간
+            "STRATEGY_COMBO": 6,     # 중간
+            "TIME_RULE": 4,          # 소수
+            "REGIME_OVERRIDE": 2,    # 최악 성과 → 최소
+        }
+        # n에 맞게 조정
+        total = sum(type_distribution.values())
+        if total != n:
+            type_distribution["NOVEL_FILTER"] += (n - total)
 
     variants = []
     for vtype, count in type_distribution.items():

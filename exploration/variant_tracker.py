@@ -64,15 +64,61 @@ class VariantTracker:
         self._sync_to_db(variant_id, stats)
 
     def evaluate(self, stats: VariantStats) -> str:
-        """변형 판정: PROMOTE / DISCARD / KEEP."""
-        if stats.trade_count < config.EXPLORATION_MIN_TRADES:
+        """변형 판정: PROMOTE / DISCARD / KEEP.
+
+        ★ 확률 기반 판단: 단순 승률이 아닌 통계적 신뢰도로 결정.
+        5건에서 1승이라도, 실제 승률이 50%일 확률이 18%나 된다.
+        "운이 나빴을 뿐"인 전략을 버리지 않는다.
+
+        베타 분포 기반: 관측된 승패에서 실제 승률의 95% 신뢰구간 하한을 계산.
+        이 하한이 기준 미만이면 "통계적으로 확실히 나쁘다"고 판단.
+        """
+        tc = stats.trade_count
+        if tc < 3:
             return "KEEP"
-        if (stats.win_rate >= config.EXPLORATION_PROMOTE_WR
-                and stats.profit_factor >= config.EXPLORATION_PROMOTE_PF):
-            return "PROMOTE"
-        if stats.win_rate < config.EXPLORATION_DISCARD_WR:
+
+        wins = stats.wins
+        losses = stats.losses
+
+        # 베타 분포 95% 신뢰구간 하한 (근사)
+        lower_bound = self._beta_lower_bound(wins, losses)
+
+        # 승격: 신뢰구간 하한이 40%+ 이고 PF 1.3+
+        if tc >= config.EXPLORATION_MIN_TRADES:
+            if lower_bound >= 0.40 and stats.profit_factor >= config.EXPLORATION_PROMOTE_PF:
+                return "PROMOTE"
+
+        # 폐기: 신뢰구간 상한이 35% 미만 → 95% 확신으로 나쁜 전략
+        upper_bound = self._beta_upper_bound(wins, losses)
+        if tc >= 10 and upper_bound < 0.35:
             return "DISCARD"
+
+        # 큰 손실: 20건+ 이고 PnL이 투자금 대비 -10% 이하
+        if tc >= 20 and stats.total_pnl_krw < -2_000_000:
+            if lower_bound < 0.30:
+                return "DISCARD"
+
         return "KEEP"
+
+    def _beta_lower_bound(self, wins: int, losses: int) -> float:
+        """베타 분포 95% 신뢰구간 하한 (정규 근사)."""
+        import math
+        a = wins + 1   # 베타 분포 alpha (prior=1)
+        b = losses + 1 # 베타 분포 beta (prior=1)
+        n = a + b
+        mean = a / n
+        std = math.sqrt(a * b / (n * n * (n + 1)))
+        return max(0, mean - 1.96 * std)
+
+    def _beta_upper_bound(self, wins: int, losses: int) -> float:
+        """베타 분포 95% 신뢰구간 상한 (정규 근사)."""
+        import math
+        a = wins + 1
+        b = losses + 1
+        n = a + b
+        mean = a / n
+        std = math.sqrt(a * b / (n * n * (n + 1)))
+        return min(1, mean + 1.96 * std)
 
     def mark_promoted(self, variant_id: str) -> None:
         """승격 상태로 변경."""
