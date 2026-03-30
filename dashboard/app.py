@@ -263,53 +263,85 @@ if PAPER_STATE_PATH.exists():
                         })
                     st.dataframe(pd.DataFrame(rows), use_container_width=True)
 
-    # ── 🚀 급등 전용 슬롯 (완전 분리) ────────────────────
+    # ── 🚀 급등슬롯 (맨 아래 고정) ─────────────────────
     surge = paper.get("surge_slots", {})
     if surge.get("max_slots"):
-        st.header("🚀 급등 전용 슬롯")
-        sc1, sc2, sc3, sc4 = st.columns(4)
-        sc1.metric("활성", f"{surge.get('active_slots', 0)} / {surge.get('max_slots', 10)}")
-        sc2.metric("거래", f"{surge.get('trade_count', 0)}건")
-        sc3.metric("PnL", f"{surge.get('total_pnl', 0):+,.0f}원")
-        stats = surge.get("learning_stats", {})
-        sc4.metric("승률", f"{stats.get('win_rate', 0):.0f}%" if stats.get("total", 0) > 0 else "대기")
+        st.divider()
+        st.header("🚀 급등슬롯")
+        st.caption("급등 코인만 추적 · 거래마다 학습 · 인사이트 자동 기록")
 
-        # 학습 통계
+        sc1, sc2, sc3, sc4, sc5 = st.columns(5)
+        sc1.metric("슬롯", f"{surge.get('active_slots', 0)} / {surge.get('max_slots', 10)}")
+        sc2.metric("거래", f"{surge.get('trade_count', 0)}건")
+        stats = surge.get("learning_stats", {})
+        sc3.metric("승률", f"{stats.get('win_rate', 0):.0f}%" if stats.get("total", 0) > 0 else "-")
+        sc4.metric("PnL", f"{surge.get('total_pnl', 0):+,.0f}원")
+        params = surge.get("optimal_params", {})
+        sc5.metric("트레일링", f"{params.get('trailing_pct', 2.0)}%")
+
+        # 10개 슬롯 테이블 (빈 슬롯도 표시)
+        max_s = surge.get("max_slots", 10)
+        surge_active = surge.get("slots", [])
+        slot_rows = []
+        for i in range(max_s):
+            if i < len(surge_active):
+                s = surge_active[i]
+                slot_rows.append({
+                    "#": f"🚀 {i+1}",
+                    "코인": s["coin"],
+                    "페이즈": s["phase"],
+                    "진입": s["entry_time"][11:19],
+                    "투자금": f"{s['allocated_krw']:,.0f}원",
+                })
+            else:
+                slot_rows.append({
+                    "#": f"⬜ {i+1}",
+                    "코인": "—",
+                    "페이즈": "대기",
+                    "진입": "—",
+                    "투자금": "—",
+                })
+        st.dataframe(pd.DataFrame(slot_rows), use_container_width=True, hide_index=True)
+
+        # 급등슬롯 학습 인사이트
         if stats.get("total", 0) > 0:
-            st.subheader("학습 현황")
+            st.subheader("급등슬롯 학습 인사이트")
             col_a, col_b = st.columns(2)
             with col_a:
-                st.markdown("**페이즈별 성과**")
+                st.markdown("**진입 페이즈별 성과**")
                 phase_rows = []
                 for phase, ps in stats.get("by_phase", {}).items():
+                    emoji = "🔥" if phase == "IGNITION" else "🚀"
                     phase_rows.append({
-                        "페이즈": phase,
+                        "페이즈": f"{emoji} {phase}",
                         "거래": ps["count"],
                         "승률": f"{ps['win_rate']:.0f}%",
-                        "평균 PnL": f"{ps['avg_pnl']:+.2f}%",
+                        "평균PnL": f"{ps['avg_pnl']:+.2f}%",
                     })
                 if phase_rows:
-                    st.dataframe(pd.DataFrame(phase_rows), use_container_width=True)
+                    st.dataframe(pd.DataFrame(phase_rows), use_container_width=True, hide_index=True)
+
+                # 학습 결론
+                by_phase = stats.get("by_phase", {})
+                ign = by_phase.get("IGNITION", {})
+                acc = by_phase.get("ACCELERATION", {})
+                if ign.get("count", 0) >= 2 and acc.get("count", 0) >= 2:
+                    if acc.get("avg_pnl", 0) > ign.get("avg_pnl", 0):
+                        st.success(f"학습 결론: ACCELERATION 진입이 유리 ({acc['avg_pnl']:+.2f}% vs {ign['avg_pnl']:+.2f}%)")
+                    else:
+                        st.success(f"학습 결론: IGNITION 조기 진입이 유리 ({ign['avg_pnl']:+.2f}% vs {acc['avg_pnl']:+.2f}%)")
+
             with col_b:
                 st.markdown("**급등 빈도 TOP 코인**")
                 top_coins = stats.get("top_coins", [])
                 if top_coins:
-                    coin_rows = [{"코인": c["coin"], "급등 횟수": c["count"]} for c in top_coins]
-                    st.dataframe(pd.DataFrame(coin_rows), use_container_width=True)
+                    coin_rows = [{"코인": c["coin"], "급등횟수": c["count"]} for c in top_coins]
+                    st.dataframe(pd.DataFrame(coin_rows), use_container_width=True, hide_index=True)
 
-            params = surge.get("optimal_params", {})
-            st.info(f"학습된 최적 파라미터: 트레일링 {params.get('trailing_pct', 2.0)}% | 최대보유 {params.get('max_hold_sec', 1800)}초")
-
-        # 현재 보유 슬롯
-        surge_slots = surge.get("slots", [])
-        if surge_slots:
-            st.subheader("보유 중")
-            slot_rows = [
-                {"코인": s["coin"], "페이즈": s["phase"],
-                 "진입": s["entry_time"], "투자금": f"{s['allocated_krw']:,.0f}원"}
-                for s in surge_slots
-            ]
-            st.dataframe(pd.DataFrame(slot_rows), use_container_width=True)
+                st.markdown("**학습된 최적 파라미터**")
+                st.info(f"트레일링: {params.get('trailing_pct', 2.0)}% | "
+                       f"최대보유: {params.get('max_hold_sec', 1800) // 60}분 | "
+                       f"평균보유: {stats.get('avg_hold_sec', 0) // 60}분")
 
 # ── 자동 새로고침 ──────────────────────────────────────────
 

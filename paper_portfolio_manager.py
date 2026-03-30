@@ -2180,34 +2180,68 @@ class PaperPortfolioManager:
                       f"{tc:>2}건 {wr:>4} {pnl:>10} | {status}")
 
     def _print_surge_report(self) -> None:
-        """급등 전용 슬롯 보고서 출력."""
+        """급등슬롯 보고서 — 콘솔 맨 아래에 고정 출력."""
         surge = self._surge_slots
         status = surge.get_status()
         active = status.get("active_slots", 0)
+        max_s = status.get("max_slots", 10)
         total_trades = status.get("trade_count", 0)
         total_pnl = status.get("total_pnl", 0)
         stats = status.get("learning_stats", {})
         params = status.get("optimal_params", {})
+        slots = status.get("slots", [])
 
-        print(f"  {'▰' * 58}")
-        print(f"  🚀 급등 전용 슬롯 | {active}개 활성 / "
-              f"{status.get('max_slots', 10)}개 | "
-              f"자본: {status.get('capital', 0) / 1e8:.0f}억원")
+        print(f"\n{'🚀' * 30}")
+        print(f"  급등슬롯 [{active}/{max_s}]  "
+              f"자본 {status.get('capital', 0) / 1e8:.0f}억원")
+        print(f"{'🚀' * 30}")
 
+        # 현재 보유 중인 슬롯 (10칸 고정)
+        print(f"  슬롯   코인    페이즈        진입시간    투자금")
+        print(f"  {'─' * 52}")
+        for i in range(max_s):
+            if i < len(slots):
+                s = slots[i]
+                print(f"  [{i+1:>2}]  {s['coin']:>6}  "
+                      f"{s['phase']:<13} "
+                      f"{s['entry_time'][11:19]}  "
+                      f"{s['allocated_krw']:>10,.0f}원")
+            else:
+                print(f"  [{i+1:>2}]   ----   대기 중")
+
+        # 급등슬롯 학습 인사이트
+        print(f"\n  ── 급등슬롯 학습 ──")
         if total_trades > 0:
             wr = stats.get("win_rate", 0)
             avg_pnl = stats.get("avg_pnl_pct", 0)
             avg_hold = stats.get("avg_hold_sec", 0)
-            print(f"  거래: {total_trades}건 | 승률: {wr:.0f}% | "
-                  f"PnL: {total_pnl:+,.0f}원 | "
-                  f"평균: {avg_pnl:+.2f}% ({avg_hold:.0f}초)")
+            print(f"  {total_trades}건 거래 | "
+                  f"승률 {wr:.0f}% | "
+                  f"PnL {total_pnl:+,.0f}원 | "
+                  f"평균 {avg_pnl:+.2f}% ({avg_hold:.0f}초)")
 
-            # 페이즈별 성과
+            # 핵심 인사이트: IGNITION vs ACCELERATION
             by_phase = stats.get("by_phase", {})
-            for phase, ps in by_phase.items():
-                print(f"    {phase}: {ps['count']}건 "
-                      f"WR={ps['win_rate']:.0f}% "
-                      f"avg={ps['avg_pnl']:+.2f}%")
+            if by_phase:
+                print(f"  인사이트:")
+                for phase, ps in by_phase.items():
+                    emoji = "🔥" if phase == "IGNITION" else "🚀"
+                    print(f"    {emoji} {phase}: {ps['count']}건 "
+                          f"승률 {ps['win_rate']:.0f}% "
+                          f"평균 {ps['avg_pnl']:+.2f}%")
+
+                # 학습 결론 자동 생성
+                ign = by_phase.get("IGNITION", {})
+                acc = by_phase.get("ACCELERATION", {})
+                if ign.get("count", 0) >= 2 and acc.get("count", 0) >= 2:
+                    if acc.get("avg_pnl", 0) > ign.get("avg_pnl", 0):
+                        print(f"    → 결론: ACCELERATION 진입이 더 유리"
+                              f" ({acc['avg_pnl']:+.2f}% vs "
+                              f"{ign['avg_pnl']:+.2f}%)")
+                    else:
+                        print(f"    → 결론: IGNITION 조기 진입이 유리"
+                              f" ({ign['avg_pnl']:+.2f}% vs "
+                              f"{acc['avg_pnl']:+.2f}%)")
 
             # 급등 빈도 TOP 코인
             top_coins = stats.get("top_coins", [])
@@ -2215,24 +2249,14 @@ class PaperPortfolioManager:
                 coins_str = ", ".join(
                     f"{c['coin']}({c['count']})" for c in top_coins[:5]
                 )
-                print(f"    급등 빈도 TOP: {coins_str}")
+                print(f"  급등 빈도: {coins_str}")
         else:
-            print(f"  대기 중 — 급등 감지 시 자동 진입")
+            print(f"  아직 거래 없음 — 급등 코인 스캔 중")
 
         # 학습된 최적 파라미터
-        print(f"  학습 파라미터: 트레일링 {params.get('trailing_pct', 2.0)}% | "
-              f"최대보유 {params.get('max_hold_sec', 1800)}초")
-
-        # 현재 보유 중인 급등 포지션
-        slots = status.get("slots", [])
-        if slots:
-            print(f"  ── 보유 중 ──")
-            for s in slots:
-                print(f"    🚀 {s['coin']:>6} | {s['phase']:<13} | "
-                      f"진입 {s['entry_time'][11:]} | "
-                      f"{s['allocated_krw']:,.0f}원")
-
-        print(f"  {'▰' * 58}")
+        print(f"  최적 파라미터: 트레일링 {params.get('trailing_pct', 2.0)}% | "
+              f"최대보유 {params.get('max_hold_sec', 1800) // 60}분")
+        print(f"{'🚀' * 30}")
 
 
 # ── CLI 진입점 ──────────────────────────────────────────────
