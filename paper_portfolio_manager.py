@@ -1986,27 +1986,21 @@ class PaperPortfolioManager:
                     total += pos.quantity * current_price
                 else:
                     total += pos.invested_krw
-        # ★ 급등 슬롯 자본 합산
+        # ★ 급등 슬롯 자본 합산 (미사용 + 슬롯 잔고 + 포지션, 1번만)
         if self._surge_slots:
-            # 미배분 급등 자본
-            active_surge = sum(
-                s.trader._balance_krw + (
-                    s.trader._position.invested_krw if s.trader._position else 0
-                )
-                for s in self._surge_slots._slots.values()
-            )
-            unused_surge = self._surge_capital - active_surge
-            if unused_surge > 0:
-                total += unused_surge
+            surge_used = 0.0
             for slot in self._surge_slots._slots.values():
-                total += slot.trader._balance_krw
+                surge_used += slot.trader._balance_krw
                 if slot.trader._position:
                     pos = slot.trader._position
                     cp = getattr(slot.trader, "_last_price", 0)
                     if cp and cp > 0:
-                        total += pos.quantity * cp
+                        surge_used += pos.quantity * cp
                     else:
-                        total += pos.invested_krw
+                        surge_used += pos.invested_krw
+            # 미사용 급등 자본 = 전체 - 슬롯에 들어간 것
+            surge_unused = max(0, self._surge_capital - surge_used)
+            total += surge_used + surge_unused
 
         # ★ 탐색 슬롯 자본 합산 (미배분 + 슬롯 잔고 + 포지션)
         if self._exploration:
@@ -2021,8 +2015,8 @@ class PaperPortfolioManager:
                     else:
                         total += pos.invested_krw
 
-        # ★ 이중 카운팅 안전장치: 초기자본의 2배 초과 시 비정상
-        if total > self._initial_capital * 2:
+        # ★ 이중 카운팅 안전장치: 초기자본의 1.5배 초과 시 비정상
+        if total > self._initial_capital * 1.5:
             logger.warning(
                 f"[자본감사] 이중 카운팅 의심: "
                 f"{total:,.0f} > {self._initial_capital * 2:,.0f} "
