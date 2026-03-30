@@ -164,7 +164,7 @@ SCREENER_MIN_RANGE_PCT = float(os.getenv("SCREENER_MIN_RANGE_PCT", "0.5"))      
 SCREENER_MIN_PRICE_KRW = 10                     # ★ 최소 가격 (10원 미만은 슬리피지 과다)
 
 # ── 영구 블랙리스트 (성과 데이터 기반) ──────────────────────────
-PERMANENT_BLACKLIST = {"A8"}                      # 35건 57% WR이지만 -2,338만원 (이길 때 적게, 질 때 크게)
+PERMANENT_BLACKLIST = set()                        # ★ 확률 재평가: A8 신뢰구간 [41%,72%] → 승률 자체는 좋음, 사이징 문제였음
 
 # ── SIDEWAYS 레짐 포지션 축소 ─────────────────────────────────
 SIDEWAYS_POSITION_SCALE = 0.5                     # 60건 48% WR, -2,461만원 → 50% 축소
