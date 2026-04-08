@@ -1,14 +1,9 @@
 """
 LiveMonitor 단위 테스트
 """
-import sys
-import os
 import unittest
 
-# main.py에서 LiveMonitor를 import하기 위해 프로젝트 루트를 path에 추가
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from main import LiveMonitor
+from bot.trading_bot import LiveMonitor
 
 
 class TestLiveMonitor(unittest.TestCase):

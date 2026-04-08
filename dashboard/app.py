@@ -3,8 +3,6 @@ Streamlit 모니터링 대시보드 — 실시간 봇 성과를 시각화한다.
 
 실행: streamlit run dashboard/app.py
 """
-import json
-import os
 import sqlite3
 import sys
 from datetime import datetime
@@ -17,7 +15,7 @@ import streamlit as st
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-import config
+import config  # noqa: E402
 
 DB_PATH = config.DB_PATH
 
@@ -181,6 +179,169 @@ if not events_df.empty:
         events_df[["timestamp", "event_type", "coin", "detail"]].head(20),
         use_container_width=True,
     )
+
+# ── 페이퍼 트레이딩 실시간 현황 (paper_state.json) ─────────
+
+PAPER_STATE_PATH = PROJECT_ROOT / "paper_state.json"
+if PAPER_STATE_PATH.exists():
+    import json
+    with open(PAPER_STATE_PATH) as f:
+        paper = json.load(f)
+
+    kpi = paper.get("kpi", {})
+    pkpi = paper.get("portfolio_kpi", {})
+
+    st.header("실시간 포트폴리오")
+    pc1, pc2, pc3, pc4 = st.columns(4)
+    pc1.metric("총 자산", f"{kpi.get('total_value', 0):,.0f}원")
+    pc2.metric("수익률", f"{kpi.get('total_return_pct', 0):+.2f}%")
+    pc3.metric("거래", f"{kpi.get('total_trades', 0)}건")
+    pc4.metric("승률", f"{kpi.get('win_rate', 0):.1f}%")
+
+    # 메인 슬롯 테이블
+    positions = paper.get("positions", [])
+    if positions:
+        st.subheader(f"메인 슬롯 ({len(positions)}개)")
+        main_rows = []
+        for p in positions:
+            main_rows.append({
+                "코인": p.get("coin", ""),
+                "전략": p.get("active_strategy_name", ""),
+                "배분(원)": f"{p.get('allocated_krw', 0):,.0f}",
+                "수익률": f"{p.get('total_return_pct', 0):+.2f}%",
+                "거래": p.get("total_trades", 0),
+                "승률": f"{p.get('win_rate', 0):.0f}%",
+                "레짐": p.get("regime", ""),
+                "간격": p.get("interval", ""),
+            })
+        st.dataframe(pd.DataFrame(main_rows), use_container_width=True)
+
+    # ── AI 탐색 슬롯 (완전 분리) ──────────────────────────
+    exp = paper.get("exploration", {})
+    if exp.get("enabled"):
+        st.header("🧪 AI 탐색 슬롯")
+        ec1, ec2, ec3, ec4, ec5 = st.columns(5)
+        ec1.metric("활성 슬롯", f"{exp.get('active_slots', 0)}개")
+        ec2.metric("탐색 자본", f"{exp.get('capital', 0) / 1e8:.0f}억원")
+        ec3.metric("승격", f"{exp.get('promoted_count', 0)}개")
+        ec4.metric("폐기", f"{exp.get('discarded_count', 0)}개")
+        ec5.metric("사이클", f"{exp.get('cycle_count', 0)}")
+
+        exp_slots = exp.get("slots", [])
+        if exp_slots:
+            # 타입별 탭으로 분리
+            type_names = {
+                "PARAM_MUTATION": "파라미터 변형",
+                "STRATEGY_COMBO": "전략 조합",
+                "NOVEL_FILTER": "신규 필터",
+                "REGIME_OVERRIDE": "레짐 분기",
+                "TIME_RULE": "시간대 제한",
+            }
+            types_present = sorted(set(
+                s.get("variant_type", "") for s in exp_slots
+            ))
+            tabs = st.tabs([
+                f"{type_names.get(t, t)} ({sum(1 for s in exp_slots if s.get('variant_type')==t)})"
+                for t in types_present
+            ])
+            for tab, vtype in zip(tabs, types_present):
+                with tab:
+                    rows = []
+                    for s in exp_slots:
+                        if s.get("variant_type") != vtype:
+                            continue
+                        tc = s.get("trade_count", 0)
+                        rows.append({
+                            "ID": s.get("variant_id", ""),
+                            "코인": s.get("coin", ""),
+                            "설명": s.get("description", ""),
+                            "거래": tc,
+                            "승률": f"{s.get('win_rate', 0):.0f}%" if tc > 0 else "-",
+                            "PF": f"{s.get('profit_factor', 0):.2f}" if tc > 0 else "-",
+                            "PnL(원)": f"{s.get('total_pnl_krw', 0):+,.0f}" if tc > 0 else "-",
+                            "상태": "평가 중" if tc >= 20 else f"수집 중 ({tc}/20)",
+                        })
+                    st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+    # ── 🚀 급등슬롯 (맨 아래 고정) ─────────────────────
+    surge = paper.get("surge_slots", {})
+    if surge.get("max_slots"):
+        st.divider()
+        st.header("🚀 급등슬롯")
+        st.caption("급등 코인만 추적 · 거래마다 학습 · 인사이트 자동 기록")
+
+        sc1, sc2, sc3, sc4, sc5 = st.columns(5)
+        sc1.metric("슬롯", f"{surge.get('active_slots', 0)} / {surge.get('max_slots', 10)}")
+        sc2.metric("거래", f"{surge.get('trade_count', 0)}건")
+        stats = surge.get("learning_stats", {})
+        sc3.metric("승률", f"{stats.get('win_rate', 0):.0f}%" if stats.get("total", 0) > 0 else "-")
+        sc4.metric("PnL", f"{surge.get('total_pnl', 0):+,.0f}원")
+        params = surge.get("optimal_params", {})
+        sc5.metric("트레일링", f"{params.get('trailing_pct', 2.0)}%")
+
+        # 10개 슬롯 테이블 (빈 슬롯도 표시)
+        max_s = surge.get("max_slots", 10)
+        surge_active = surge.get("slots", [])
+        slot_rows = []
+        for i in range(max_s):
+            if i < len(surge_active):
+                s = surge_active[i]
+                slot_rows.append({
+                    "#": f"🚀 {i+1}",
+                    "코인": s["coin"],
+                    "페이즈": s["phase"],
+                    "진입": s["entry_time"][11:19],
+                    "투자금": f"{s['allocated_krw']:,.0f}원",
+                })
+            else:
+                slot_rows.append({
+                    "#": f"⬜ {i+1}",
+                    "코인": "—",
+                    "페이즈": "대기",
+                    "진입": "—",
+                    "투자금": "—",
+                })
+        st.dataframe(pd.DataFrame(slot_rows), use_container_width=True, hide_index=True)
+
+        # 급등슬롯 학습 인사이트
+        if stats.get("total", 0) > 0:
+            st.subheader("급등슬롯 학습 인사이트")
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.markdown("**진입 페이즈별 성과**")
+                phase_rows = []
+                for phase, ps in stats.get("by_phase", {}).items():
+                    emoji = "🔥" if phase == "IGNITION" else "🚀"
+                    phase_rows.append({
+                        "페이즈": f"{emoji} {phase}",
+                        "거래": ps["count"],
+                        "승률": f"{ps['win_rate']:.0f}%",
+                        "평균PnL": f"{ps['avg_pnl']:+.2f}%",
+                    })
+                if phase_rows:
+                    st.dataframe(pd.DataFrame(phase_rows), use_container_width=True, hide_index=True)
+
+                # 학습 결론
+                by_phase = stats.get("by_phase", {})
+                ign = by_phase.get("IGNITION", {})
+                acc = by_phase.get("ACCELERATION", {})
+                if ign.get("count", 0) >= 2 and acc.get("count", 0) >= 2:
+                    if acc.get("avg_pnl", 0) > ign.get("avg_pnl", 0):
+                        st.success(f"학습 결론: ACCELERATION 진입이 유리 ({acc['avg_pnl']:+.2f}% vs {ign['avg_pnl']:+.2f}%)")
+                    else:
+                        st.success(f"학습 결론: IGNITION 조기 진입이 유리 ({ign['avg_pnl']:+.2f}% vs {acc['avg_pnl']:+.2f}%)")
+
+            with col_b:
+                st.markdown("**급등 빈도 TOP 코인**")
+                top_coins = stats.get("top_coins", [])
+                if top_coins:
+                    coin_rows = [{"코인": c["coin"], "급등횟수": c["count"]} for c in top_coins]
+                    st.dataframe(pd.DataFrame(coin_rows), use_container_width=True, hide_index=True)
+
+                st.markdown("**학습된 최적 파라미터**")
+                st.info(f"트레일링: {params.get('trailing_pct', 2.0)}% | "
+                       f"최대보유: {params.get('max_hold_sec', 1800) // 60}분 | "
+                       f"평균보유: {stats.get('avg_hold_sec', 0) // 60}분")
 
 # ── 자동 새로고침 ──────────────────────────────────────────
 

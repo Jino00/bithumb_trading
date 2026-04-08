@@ -28,6 +28,7 @@ from notifier.telegram_notifier import TelegramNotifier
 from risk.risk_manager import RiskManager
 from screener.coin_screener import CoinScreener, CoinScore
 from strategy.rsi_strategy import RSIStrategy
+from strategy.scalp_strategy import ScalpStrategy
 from strategy.strategy_gate import StrategyGate
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,7 @@ logger = logging.getLogger(__name__)
 # ── LiveMonitor 임포트 (main.py에 정의) ───────────────────────────────────────
 # 순환 임포트 방지를 위해 지연 임포트로 처리한다.
 def _import_live_monitor():
-    from main import LiveMonitor
+    from bot.trading_bot import LiveMonitor
     return LiveMonitor
 
 
@@ -47,7 +48,7 @@ class CoinSlot:
     """활성 코인 하나의 런타임 상태를 보관한다."""
     coin: str
     bot: object              # TradingBot 인스턴스
-    strategy: RSIStrategy
+    strategy: object         # RSIStrategy 또는 ScalpStrategy
     risk_manager: RiskManager
     live_monitor: object     # LiveMonitor 인스턴스
     adaptive_engine: Optional[AdaptiveEngine] = None
@@ -204,49 +205,59 @@ class PortfolioManager:
         try:
             # 1. 과거 데이터 수집
             fetcher = DataFetcher(self.client)
-            df = fetcher.fetch(coin, days=config.BACKTEST_DAYS, interval="24h")
+            df = fetcher.fetch(coin, days=config.BACKTEST_DAYS, interval=config.RSI_CANDLE_INTERVAL)
             if df is None or df.empty:
                 logger.warning(f"[Portfolio] {coin} 데이터 수집 실패 — 블랙리스트 등록")
                 self._add_to_blacklist(coin, "데이터 수집 실패")
                 return False
 
-            # 2. 그리드서치
-            base_strategy = RSIStrategy(
-                config.RSI_PERIOD, config.RSI_OVERSOLD, config.RSI_OVERBOUGHT
-            )
-            engine = BacktestEngine(base_strategy)
-            gs = engine.grid_search(df)
-            best_params = gs.best_params
-            best_result = gs.best_result
-            best_result.best_params = best_params
-
-            # 3. 게이트 검증
-            gate = StrategyGate(
-                min_win_rate=config.MIN_WIN_RATE,
-                min_trades=config.MIN_BACKTEST_TRADES,
-                max_mdd=config.MAX_DRAWDOWN_PCT,
-                min_profit_factor=config.MIN_PROFIT_FACTOR,
-            )
-            gate_result = gate.check(best_result)
-
-            if not gate_result.passed:
-                logger.info(
-                    f"[Portfolio] {coin} 게이트 미통과: "
-                    f"{', '.join(gate_result.fail_reasons)} — 블랙리스트 등록"
+            # 2. 전략 선택 및 검증
+            if config.SCALP_ENTRY_MODE == "meta":
+                live_strategy = self._create_scalp_strategy()
+                best_params = {"mode": "meta", "regime_filter": True}
+                # ScalpStrategy는 자체 파라미터 사용 (config.py에 최적값 반영됨)
+                logger.info(f"[Portfolio] {coin} ScalpStrategy(메타) 사용")
+            else:
+                # 기존 RSI 그리드서치 경로
+                base_strategy = RSIStrategy(
+                    config.RSI_PERIOD, config.RSI_OVERSOLD, config.RSI_OVERBOUGHT
                 )
-                self._add_to_blacklist(coin, f"게이트 미통과: {', '.join(gate_result.fail_reasons)}")
-                self.trade_logger.log_event(
-                    "COIN_GATE_FAIL", coin,
-                    {"fail_reasons": gate_result.fail_reasons, "win_rate": gate_result.win_rate},
-                )
-                return False
+                engine = BacktestEngine(base_strategy)
+                gs = engine.grid_search(df)
+                best_params = gs.best_params
+                best_result = gs.best_result
+                best_result.best_params = best_params
 
-            # 4. 전략 + 컴포넌트 생성
-            live_strategy = RSIStrategy(
-                period=best_params.get("period", config.RSI_PERIOD),
-                oversold=best_params.get("oversold", config.RSI_OVERSOLD),
-                overbought=best_params.get("overbought", config.RSI_OVERBOUGHT),
-            )
+                gate = StrategyGate(
+                    min_win_rate=config.MIN_WIN_RATE,
+                    min_trades=config.MIN_BACKTEST_TRADES,
+                    max_mdd=config.MAX_DRAWDOWN_PCT,
+                    min_profit_factor=config.MIN_PROFIT_FACTOR,
+                )
+                gate_result = gate.check(best_result)
+
+                if not gate_result.passed:
+                    logger.info(
+                        f"[Portfolio] {coin} 게이트 미통과: "
+                        f"{', '.join(gate_result.fail_reasons)} — 블랙리스트 등록"
+                    )
+                    self._add_to_blacklist(
+                        coin, f"게이트 미통과: {', '.join(gate_result.fail_reasons)}"
+                    )
+                    self.trade_logger.log_event(
+                        "COIN_GATE_FAIL", coin,
+                        {
+                            "fail_reasons": gate_result.fail_reasons,
+                            "win_rate": gate_result.win_rate,
+                        },
+                    )
+                    return False
+
+                live_strategy = RSIStrategy(
+                    period=best_params.get("period", config.RSI_PERIOD),
+                    oversold=best_params.get("oversold", config.RSI_OVERSOLD),
+                    overbought=best_params.get("overbought", config.RSI_OVERBOUGHT),
+                )
 
             risk_manager = RiskManager(
                 stop_loss_pct=config.STOP_LOSS_PCT,
@@ -273,10 +284,11 @@ class PortfolioManager:
                     client=self.client,
                     notifier=self.notifier,
                     coin=coin,
+                    risk_manager=risk_manager,
                 )
 
             # 5. TradingBot 생성 (지연 임포트)
-            from main import TradingBot
+            from bot.trading_bot import TradingBot
             bot = TradingBot(
                 client=self.client,
                 strategy=live_strategy,
@@ -299,30 +311,24 @@ class PortfolioManager:
             )
             self._slots[coin] = slot
 
-            self.trade_logger.log_event(
-                "COIN_ACTIVATED", coin,
-                {
-                    "params": best_params,
-                    "win_rate": best_result.win_rate,
-                    "profit_factor": best_result.profit_factor,
-                    "range_pct": score.range_pct,
-                    "volume_krw": score.volume_krw,
-                },
-            )
+            strategy_desc = self._describe_strategy(live_strategy)
+            event_data = {
+                "params": best_params,
+                "range_pct": score.range_pct,
+                "volume_krw": score.volume_krw,
+                "strategy_type": config.SCALP_ENTRY_MODE,
+            }
+            self.trade_logger.log_event("COIN_ACTIVATED", coin, event_data)
 
             logger.info(
-                f"[Portfolio] {coin} 활성화 완료 | "
-                f"RSI({live_strategy.period},{live_strategy.oversold},{live_strategy.overbought}) | "
-                f"승률={best_result.win_rate:.1f}% PF={best_result.profit_factor:.2f}"
+                f"[Portfolio] {coin} 활성화 완료 | {strategy_desc}"
             )
 
             if self.notifier:
                 self.notifier.send(
                     f"<b>코인 활성화</b>\n"
                     f"코인: {coin}\n"
-                    f"파라미터: RSI({live_strategy.period},{live_strategy.oversold},{live_strategy.overbought})\n"
-                    f"백테스트 승률: {best_result.win_rate:.1f}%\n"
-                    f"PF: {best_result.profit_factor:.2f}\n"
+                    f"전략: {strategy_desc}\n"
                     f"변동폭: {score.range_pct:.1f}%"
                 )
             return True
@@ -453,6 +459,27 @@ class PortfolioManager:
         """코인당 KRW 배분 금액을 계산한다."""
         return config.TRADE_AMOUNT * (self.per_coin_allocation_pct / 100)
 
+    # ── 전략 팩토리 ──────────────────────────────────────────────────────────
+
+    def _create_scalp_strategy(self) -> ScalpStrategy:
+        """ScalpStrategy 인스턴스를 생성한다 (config.py 파라미터 사용)."""
+        from strategy.market_regime import EnsembleRegimeDetector
+        detector = EnsembleRegimeDetector(
+            bull_threshold=config.REGIME_BULL_THRESHOLD,
+            bear_threshold=config.REGIME_BEAR_THRESHOLD,
+        )
+        return ScalpStrategy(regime_detector=detector)
+
+    def _describe_strategy(self, strategy) -> str:
+        """전략 종류에 따른 설명 문자열 반환."""
+        if isinstance(strategy, ScalpStrategy):
+            return "ScalpMeta(BULL→S2, SIDEWAYS→S3, BEAR→HOLD)"
+        if isinstance(strategy, RSIStrategy):
+            return (
+                f"RSI({strategy.period},{strategy.oversold},{strategy.overbought})"
+            )
+        return strategy.name
+
     # ── 블랙리스트 관리 ──────────────────────────────────────────────────────
 
     def _add_to_blacklist(self, coin: str, reason: str) -> None:
@@ -543,7 +570,7 @@ class PortfolioManager:
                 "draining": slot.draining,
                 "active": slot.bot.is_active,
                 "has_position": slot.bot._current_entry_id is not None,
-                "strategy": f"RSI({slot.strategy.period},{slot.strategy.oversold},{slot.strategy.overbought})",
+                "strategy": self._describe_strategy(slot.strategy),
                 "live_win_rate": slot.live_monitor.current_win_rate(),
                 "risk_dd": slot.risk_manager.status()["current_drawdown_pct"],
                 "activated_at": slot.activated_at.isoformat(),

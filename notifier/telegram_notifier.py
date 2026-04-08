@@ -9,7 +9,6 @@
   - 오류 발생
 """
 import logging
-from typing import Optional
 
 import requests
 

@@ -5,7 +5,6 @@ MACD 전략 구현
 청산 조건: MACD 라인이 시그널 라인을 하향 돌파 (데드 크로스)
 """
 import logging
-from typing import Optional
 
 import pandas as pd
 import ta

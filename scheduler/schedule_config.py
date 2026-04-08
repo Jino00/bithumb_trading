@@ -81,11 +81,11 @@ def setup_multi_coin_schedule(
     """
     schedule.clear()
 
-    schedule.every(5).minutes.do(trading_job)
-    logger.info("스케줄 등록: trading_job — 매 5분 (멀티코인)")
+    schedule.every(1).minutes.do(trading_job)
+    logger.info("스케줄 등록: trading_job — 매 1분 (멀티코인)")
 
-    schedule.every(30).minutes.do(scan_job)
-    logger.info("스케줄 등록: scan_job — 매 30분")
+    schedule.every(1).minutes.do(scan_job)
+    logger.info("스케줄 등록: scan_job — 매 1분")
 
     if performance_job:
         schedule.every(1).hours.do(performance_job)

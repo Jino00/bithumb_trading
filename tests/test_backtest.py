@@ -238,7 +238,8 @@ class TestRSIStrategy(unittest.TestCase):
         close = np.maximum(close, 1_000_000)
         high = close * 1.005
         low = close * 0.995
-        open_ = np.roll(close, 1); open_[0] = close[0]
+        open_ = np.roll(close, 1)
+        open_[0] = close[0]
         volume = rng.uniform(1, 5, n)
         index = [datetime(2024, 1, 1) + timedelta(hours=i) for i in range(n)]
         df = pd.DataFrame(
